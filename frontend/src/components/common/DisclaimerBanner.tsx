@@ -15,7 +15,8 @@ export function DisclaimerBanner() {
     pathname.startsWith("/doctor") ||
     pathname.startsWith("/organization") ||
     pathname.startsWith("/healthcamp") ||
-    pathname.startsWith("/medical")
+    pathname.startsWith("/medical") ||
+    pathname.startsWith("/facility")
   ) {
     return null;
   }

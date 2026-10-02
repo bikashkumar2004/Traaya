@@ -250,36 +250,100 @@ export async function POST(req: Request) {
       RETURNING *
     `;
 
-    return NextResponse.json({
+    const userResult = {
+      id: profile.id,
+      userId: profile.user_id,
+      email: profile.email,
+      phone: profile.phone,
+      fullName: profile.full_name,
+      firstName: profile.full_name.split(" ")[0],
+      lastName: profile.full_name.includes(" ") ? profile.full_name.split(" ").slice(1).join(" ") : "",
+      role: profile.role,
+      patientUhid: profile.user_id,
+      gender: profile.gender,
+      dateOfBirth: profile.date_of_birth,
+      age: profile.age,
+      bloodGroup: patientProfile?.blood_group || bloodGroup,
+      facilityName: patientProfile?.primary_facility_name || "Community Health Centre (CHC) Khandapada",
+      addressLine1: profile.address_line1,
+      state: profile.state,
+      district: profile.district,
+      city: profile.city,
+      block: profile.block,
+      postalCode: profile.postal_code,
+      disability: patientProfile?.disability || disability,
+      isAffilatedToOrg: patientProfile?.is_affilated_to_org ?? Boolean(isAffilatedToOrg),
+      organizationName: patientProfile?.organization_name || organizationName || "",
+      idInOrg: patientProfile?.id_in_org || idInOrg,
+      orgIdCard: patientProfile?.org_id_card || orgIdCard,
+    };
+
+    const nowSeconds = Math.floor(Date.now() / 1000);
+    const expiresAt = nowSeconds + 3600;
+    const isProd = process.env.NODE_ENV === "production";
+    const refreshLifetime = 7 * 86400;
+
+    const tokenHeader = Buffer.from(JSON.stringify({ alg: "HS256", typ: "JWT" })).toString("base64url");
+    const accessClaims = Buffer.from(JSON.stringify({
+      sub: userResult.id,
+      user: userResult,
+      iat: nowSeconds,
+      exp: expiresAt,
+      typ: "access",
+    })).toString("base64url");
+    const accessToken = `${tokenHeader}.${accessClaims}.sig_${Date.now().toString(36)}`;
+
+    const refreshClaims = Buffer.from(JSON.stringify({
+      sub: userResult.id,
+      user: userResult,
+      iat: nowSeconds,
+      exp: nowSeconds + refreshLifetime,
+      typ: "refresh",
+    })).toString("base64url");
+    const refreshToken = `${tokenHeader}.${refreshClaims}.sig_rf_${Date.now().toString(36)}`;
+
+    const response = NextResponse.json({
       success: true,
-      user: {
-        id: profile.id,
-        userId: profile.user_id,
-        email: profile.email,
-        phone: profile.phone,
-        fullName: profile.full_name,
-        firstName: profile.full_name.split(" ")[0],
-        lastName: profile.full_name.includes(" ") ? profile.full_name.split(" ").slice(1).join(" ") : "",
-        role: profile.role,
-        patientUhid: profile.user_id,
-        gender: profile.gender,
-        dateOfBirth: profile.date_of_birth,
-        age: profile.age,
-        bloodGroup: patientProfile?.blood_group || bloodGroup,
-        facilityName: patientProfile?.primary_facility_name || "Community Health Centre (CHC) Khandapada",
-        addressLine1: profile.address_line1,
-        state: profile.state,
-        district: profile.district,
-        city: profile.city,
-        block: profile.block,
-        postalCode: profile.postal_code,
-        disability: patientProfile?.disability || disability,
-        isAffilatedToOrg: patientProfile?.is_affilated_to_org ?? Boolean(isAffilatedToOrg),
-        organizationName: patientProfile?.organization_name || organizationName || "",
-        idInOrg: patientProfile?.id_in_org || idInOrg,
-        orgIdCard: patientProfile?.org_id_card || orgIdCard,
-      }
+      access_token: accessToken,
+      token_type: "Bearer",
+      expires_in: 3600,
+      expires_at: expiresAt,
+      user: userResult,
     });
+
+    response.cookies.set("refresh_token", refreshToken, {
+      httpOnly: true,
+      secure: isProd,
+      sameSite: "lax",
+      maxAge: refreshLifetime,
+      path: "/",
+    });
+
+    response.cookies.set("triage_role", "patient", {
+      httpOnly: false,
+      secure: isProd,
+      sameSite: "lax",
+      maxAge: refreshLifetime,
+      path: "/",
+    });
+
+    response.cookies.set("triage_user_id", userResult.id, {
+      httpOnly: false,
+      secure: isProd,
+      sameSite: "lax",
+      maxAge: refreshLifetime,
+      path: "/",
+    });
+
+    response.cookies.set("triage_user_display", encodeURIComponent(JSON.stringify(userResult)), {
+      httpOnly: false,
+      secure: isProd,
+      sameSite: "lax",
+      maxAge: refreshLifetime,
+      path: "/",
+    });
+
+    return response;
   } catch (err: any) {
     console.error("Error in /api/auth/register:", err);
     return NextResponse.json(

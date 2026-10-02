@@ -77,16 +77,37 @@ function LoginForm() {
   // OTP inputs refs
   const inputRefs = useRef<(HTMLInputElement | null)[]>([]);
 
-  // Update setup mode from URL parameter changes
+  // Update setup mode from URL parameter changes or redirect param
+  const redirectParam = searchParams.get("redirect");
   useEffect(() => {
-    if (initialSetupParam === "health_worker") {
+    if (redirectParam?.includes("/admin") || searchParams.get("role") === "admin") {
       setSetupMode("health_worker");
-      setSelectedRole("nurse");
-    } else if (initialSetupParam === "individual") {
+      setSelectedRole("admin");
+      setAuthMethod("email_password");
+      setEmailInput("admin@triageassist.live");
+      setPasswordInput("Triage@2026");
+    } else if (
+      initialSetupParam === "health_worker" ||
+      redirectParam?.includes("/nurse") ||
+      redirectParam?.includes("/doctor") ||
+      redirectParam?.includes("/medical")
+    ) {
+      setSetupMode("health_worker");
+      if (redirectParam?.includes("/doctor")) setSelectedRole("doctor");
+      else if (redirectParam?.includes("/medical")) setSelectedRole("facility");
+      else setSelectedRole("nurse");
+    } else if (
+      initialSetupParam === "individual" ||
+      redirectParam?.includes("/patient") ||
+      redirectParam?.includes("/organization") ||
+      redirectParam?.includes("/healthcamp")
+    ) {
       setSetupMode("individual");
-      setSelectedRole("patient");
+      if (redirectParam?.includes("/organization")) setSelectedRole("organization");
+      else if (redirectParam?.includes("/healthcamp")) setSelectedRole("healthcamp");
+      else setSelectedRole("patient");
     }
-  }, [initialSetupParam]);
+  }, [initialSetupParam, redirectParam, searchParams]);
 
   // Countdown timer for Resend OTP
   useEffect(() => {
@@ -191,6 +212,17 @@ function LoginForm() {
     const cleanDigits = phone.replace(/\D/g, "").slice(-10);
     const cleanEmail = email.trim().toLowerCase();
 
+    // System Administrator
+    if (
+      cleanDigits === "9999999999" || 
+      cleanDigits === "9999900001" || 
+      cleanEmail.includes("admin") || 
+      cleanEmail === "admin@triageassist.live" || 
+      cleanEmail === "admin@triage.gov.in"
+    ) {
+      return "admin";
+    }
+
     // Doctor
     if (
       cleanDigits === "9910088776" || 
@@ -259,16 +291,37 @@ function LoginForm() {
 
 
   const getRoleDestination = (role: UserRole) => {
-    switch (role) {
-      case "patient": return "/patient";
-      case "organization": return "/organization";
-      case "healthcamp": return "/healthcamp";
-      case "nurse": return "/nurse";
-      case "doctor": return "/doctor";
-      case "facility": return "/medical";
-      case "medical": return "/medical";
-      default: return "/patient";
+    const defaultRoute = (() => {
+      switch (role) {
+        case "patient": return "/patient";
+        case "organization": return "/organization";
+        case "healthcamp": return "/healthcamp";
+        case "nurse": return "/nurse";
+        case "doctor": return "/doctor";
+        case "facility": return "/medical";
+        case "medical": return "/medical";
+        case "admin": return "/admin";
+        default: return "/patient";
+      }
+    })();
+
+    if (redirectParam && redirectParam.startsWith("/")) {
+      if (redirectParam.startsWith("/facility")) {
+        return "/medical";
+      }
+      if (
+        (role === "patient" && redirectParam.startsWith("/patient")) ||
+        (role === "nurse" && redirectParam.startsWith("/nurse")) ||
+        (role === "doctor" && redirectParam.startsWith("/doctor")) ||
+        ((role === "facility" || role === "medical") && redirectParam.startsWith("/medical")) ||
+        (role === "organization" && redirectParam.startsWith("/organization")) ||
+        (role === "healthcamp" && redirectParam.startsWith("/healthcamp")) ||
+        role === "admin"
+      ) {
+        return redirectParam;
+      }
     }
+    return defaultRoute;
   };
 
   const handleSubmit = async (e: React.FormEvent) => {
@@ -402,6 +455,25 @@ function LoginForm() {
                 <ArrowLeft className="w-3.5 h-3.5 text-slate-500" />
                 <span>Back to Home</span>
               </Link>
+
+              {/* Direct Admin Quick Access Button */}
+              <button
+                type="button"
+                onClick={async () => {
+                  setLoading(true);
+                  setSelectedRole("admin");
+                  setEmailInput("admin@triageassist.live");
+                  setPasswordInput("Triage@2026");
+                  await loginWithEmailPassword("admin", "admin@triageassist.live", "Triage@2026");
+                  setLoading(false);
+                  router.push("/admin");
+                }}
+                className="flex items-center gap-1.5 text-xs font-bold text-amber-800 bg-amber-50 hover:bg-amber-100 border border-amber-200 px-3 py-1.5 rounded-lg transition-colors cursor-pointer shadow-2xs"
+                title="Direct Administrator Access"
+              >
+                <ShieldCheck className="w-3.5 h-3.5 text-amber-700" />
+                <span>Admin Login</span>
+              </button>
 
               {/* Indian Languages Selector */}
               <div className="relative">

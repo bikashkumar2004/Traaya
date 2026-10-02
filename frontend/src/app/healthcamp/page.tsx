@@ -61,42 +61,7 @@ export default function HealthCampPortalPage() {
   const [urgency, setUrgency] = useState<"Immediate" | "Urgent" | "Routine">("Routine");
   const [intakeSuccess, setIntakeSuccess] = useState(false);
 
-  // Fetch real attendees from Supabase camp_attendees table
-  useEffect(() => {
-    async function loadCampAttendees() {
-      if (isSupabaseConfigured && supabase) {
-        try {
-          const { data, error } = await supabase
-            .from("camp_attendees")
-            .select("*")
-            .order("registered_time", { ascending: false });
 
-          if (!error && data && data.length > 0) {
-            const mapped: CampAttendee[] = data.map((d: any) => ({
-              id: d.id,
-              tokenNumber: d.token_number || `#CMP-${String(d.id).slice(0, 4)}`,
-              patientName: d.patient_name,
-              age: d.age,
-              gender: d.gender,
-              bp: d.bp || "120/80",
-              pulse: d.pulse || 78,
-              spo2: d.spo2 || 98,
-              temp: d.temp || "98.6°F",
-              complaint: d.complaint,
-              urgency: d.urgency as any,
-              status: d.status as any,
-              registeredTime: new Date(d.registered_time).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" }),
-            }));
-            setAttendees(mapped);
-          }
-        } catch (e) {
-          console.warn("Notice loading camp attendees from Supabase:", e);
-        }
-      }
-    }
-
-    loadCampAttendees();
-  }, []);
 
   const handleRapidIntake = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -121,27 +86,6 @@ export default function HealthCampPortalPage() {
     setAttendees((prev) => [newAttendee, ...prev]);
     setIntakeSuccess(true);
     setNotificationToast(`Token ${newAttendee.tokenNumber} issued to ${patientName}`);
-
-    // Persist to Supabase camp_attendees table
-    if (isSupabaseConfigured && supabase) {
-      try {
-        await supabase.from("camp_attendees").insert({
-          token_number: newAttendee.tokenNumber,
-          patient_name: newAttendee.patientName,
-          age: newAttendee.age,
-          gender: newAttendee.gender,
-          bp: newAttendee.bp,
-          pulse: newAttendee.pulse,
-          spo2: newAttendee.spo2,
-          temp: newAttendee.temp,
-          complaint: newAttendee.complaint,
-          urgency: newAttendee.urgency,
-          status: newAttendee.status,
-        });
-      } catch (err) {
-        console.warn("Notice saving attendee to Supabase:", err);
-      }
-    }
 
     // Reset form
     setPatientName("");
@@ -221,10 +165,6 @@ export default function HealthCampPortalPage() {
         <div className="bg-white rounded-3xl border border-slate-200 p-6 sm:p-7 shadow-xs">
           <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-6">
             <div className="space-y-1">
-              <div className="inline-flex items-center gap-2 px-3 py-1 rounded-full text-xs font-bold bg-teal-50 text-teal-800 border border-teal-200">
-                <MapPin className="w-3.5 h-3.5 text-teal-700" />
-                <span>Nayagarh District Health Mission &bull; Active Mobile Camp</span>
-              </div>
               <h1 className="text-2xl sm:text-3xl font-black text-slate-900 tracking-tight">
                 Rural Health Screening &amp; Rapid Field Triage Desk
               </h1>

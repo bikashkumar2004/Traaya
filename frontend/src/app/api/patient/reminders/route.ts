@@ -13,7 +13,7 @@ export async function GET(req: Request) {
   const { searchParams } = new URL(req.url);
   const patientId = searchParams.get("patient_id");
 
-  if (!patientId || !/^[0-9a-fA-F-]{36}$/.test(patientId)) {
+  if (!patientId) {
     return NextResponse.json({
       success: true,
       reminders: [],
@@ -24,10 +24,24 @@ export async function GET(req: Request) {
   const sql = postgres(dbUrl, { max: 3 });
 
   try {
+    let resolvedUuid = patientId;
+    if (!/^[0-9a-fA-F-]{36}$/.test(patientId)) {
+      const [pRow] = await sql`SELECT id FROM public.profiles WHERE user_id = ${patientId}::text LIMIT 1`;
+      if (pRow?.id) {
+        resolvedUuid = pRow.id;
+      } else {
+        return NextResponse.json({
+          success: true,
+          reminders: [],
+          count: 0,
+        });
+      }
+    }
+
     // Only return real, existing reminders stored in database for this patient
     const reminders = await sql`
       SELECT * FROM public.patient_reminders
-      WHERE patient_id = ${patientId}::uuid
+      WHERE patient_id = ${resolvedUuid}::uuid
       ORDER BY created_at DESC
     `;
 

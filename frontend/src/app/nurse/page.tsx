@@ -31,23 +31,46 @@ function NursePortalContent() {
   const [dbSource, setDbSource] = useState<"api" | "supabase" | "fallback">("supabase");
   const [notificationToast, setNotificationToast] = useState<string | null>(null);
 
-  // Load real data from live PostgreSQL / Supabase on mount
-  const loadData = useCallback(async () => {
-    setLoadingDb(true);
+  // Hydrate cached nurse cases from sessionStorage on mount (client-only)
+  useEffect(() => {
     try {
-      const result = await fetchLiveNurseQueue();
-      setCases(result.cases || []);
+      const cached = sessionStorage.getItem("triage_cached_nurse_cases");
+      if (cached) {
+        setCases(JSON.parse(cached));
+        setLoadingDb(false);
+      }
+    } catch {}
+  }, []);
+
+  // Load real data from live PostgreSQL / Supabase on mount (facility-scoped)
+  const loadData = useCallback(async () => {
+    try {
+      const result = await fetchLiveNurseQueue({
+        facilityId: user?.facilityId || null,
+        facilityName: user?.facilityName || null,
+        nurseId: user?.id || null,
+      });
+      const loadedCases = result.cases || [];
+      setCases(loadedCases);
       setDbSource(result.source);
+      if (typeof window !== "undefined") {
+        sessionStorage.setItem("triage_cached_nurse_cases", JSON.stringify(loadedCases));
+      }
     } catch (e) {
       console.warn("Could not load live database records from Supabase:", e);
       setCases([]);
     } finally {
       setLoadingDb(false);
     }
-  }, []);
+  }, [user?.facilityId, user?.facilityName, user?.id]);
 
   useEffect(() => {
     loadData();
+    // Auto-refresh every 10 seconds so new patient submissions appear for all nurses of this facility
+    const interval = setInterval(() => {
+      loadData();
+    }, 10000);
+    return () => clearInterval(interval);
   }, [loadData]);
 
   // Handle case review action submission (Persists to database)
@@ -58,11 +81,37 @@ function NursePortalContent() {
     scheduleTime?: string,
     revertedQuestions?: { id: string; question: string; answer?: string }[],
     assignedDoctor?: string,
-    referralFacility?: string
+    referralFacility?: string,
+    assignedDoctorId?: string,
+    referralFacilityId?: string
   ) => {
     if (!selectedCase) return;
 
     const caseNum = selectedCase.id;
+
+    const finalTargetStatus =
+      actionType === "Schedule & Forward to Doctor" ||
+      targetStatus.toLowerCase() === "schedule" ||
+      targetStatus.toLowerCase() === "scheduled"
+        ? "Scheduled"
+        : targetStatus;
+
+    // Resolve active nurse ID referencing profiles table
+    let activeNurseId = user?.id;
+    let activeNurseName = user?.fullName;
+
+    if (!activeNurseId && typeof window !== "undefined") {
+      try {
+        const stored = localStorage.getItem("triageassist_user");
+        if (stored) {
+          const parsed = JSON.parse(stored);
+          activeNurseId = parsed?.id;
+          activeNurseName = parsed?.fullName || activeNurseName;
+        }
+      } catch {
+        // ignore
+      }
+    }
 
     // Optimistic UI update
     setCases((prev) =>
@@ -70,17 +119,23 @@ function NursePortalContent() {
         c.id === caseNum
           ? {
               ...c,
-              status: targetStatus,
+              status: finalTargetStatus,
+              nurseId: activeNurseId || c.nurseId,
+              nurseName: activeNurseName || c.nurseName,
+              doctorId: assignedDoctorId || c.doctorId,
+              doctorName: assignedDoctor || c.doctorName,
               quickNotes: note,
               scheduleTime: scheduleTime || c.scheduleTime,
               revertedQuestions: revertedQuestions || c.revertedQuestions,
               facility: referralFacility || c.facility,
+              referalFacility: referralFacility || c.referalFacility,
+              referalFacilityId: referralFacilityId || c.referalFacilityId,
             }
           : c
       )
     );
 
-    setNotificationToast(`Case ${caseNum} updated to "${targetStatus}" in database.`);
+    setNotificationToast(`Case ${caseNum} updated to "${finalTargetStatus}" in database.`);
     setTimeout(() => setNotificationToast(null), 4000);
 
     // Persist to live PostgreSQL / Supabase
@@ -88,17 +143,21 @@ function NursePortalContent() {
       case_number: caseNum,
       action_type: actionType,
       review_note: note,
-      target_status: targetStatus,
-      assigned_doctor_name: assignedDoctor || "Dr. Ananya Sen, MD",
+      target_status: finalTargetStatus,
+      doctor_id: assignedDoctorId,
+      doctor_name: assignedDoctor,
       referral_destination: referralFacility,
       referal_facility: referralFacility,
-      referal_facility_id: referralFacility ? `FAC-${referralFacility.slice(0, 4).toUpperCase()}` : undefined,
+      referal_facility_id: referralFacilityId,
       transfer_reason: actionType === "Refer / Escalate" ? note : undefined,
-      nurse_id: user?.id,
-      nurse_name: user?.fullName || "Nurse Staff",
+      nurse_id: activeNurseId,
+      nurse_name: activeNurseName || "Nurse Staff",
       schedule_time: scheduleTime,
       reverted_questions: revertedQuestions,
     });
+
+    // Refresh live queue from database to ensure complete synchronization
+    await loadData();
 
     setSelectedCase(null);
     setActiveTab("activity");
@@ -106,8 +165,8 @@ function NursePortalContent() {
 
   // Handle new intake case creation (Persists to database)
   const handleAddNewCase = async (newCase: CaseDetails) => {
-    // Optimistically prepend to state
-    setCases((prev) => [newCase, ...prev]);
+    // Optimistically prepend to state, filtering duplicate id if any
+    setCases((prev) => [newCase, ...prev.filter((c) => c.id !== newCase.id)]);
 
     setNotificationToast(`Case ${newCase.id} pushed to live triage queue database.`);
     setTimeout(() => setNotificationToast(null), 4000);
@@ -164,6 +223,14 @@ function NursePortalContent() {
             <span className="text-slate-500 hidden sm:inline">
               {cases.length} Total Registered Cases
             </span>
+            {user?.facilityName && (
+              <>
+                <span className="text-slate-400 hidden sm:inline">&bull;</span>
+                <span className="text-teal-900 font-bold bg-teal-50 px-2 py-0.5 rounded border border-teal-200 hidden sm:inline">
+                  Facility: {user.facilityName}
+                </span>
+              </>
+            )}
           </span>
         </div>
 
@@ -218,6 +285,7 @@ function NursePortalContent() {
       {activeTab === "activity" && (
         <CaseActivityView
           initialCases={cases}
+          currentNurseId={user?.id}
           onViewCase={handleSelectCaseForReview}
         />
       )}

@@ -1,8 +1,9 @@
 "use client";
 
-import React, { useState } from "react";
+import React, { useState, useMemo, useEffect } from "react";
 import { useRouter } from "next/navigation";
 import { useAuth, UserRole } from "@/lib/auth-context";
+import { getIndiaStates, getDistrictsForState, getBlocksForDistrict } from "@/lib/india-locations";
 import {
   ShieldAlert,
   UserCheck,
@@ -25,7 +26,8 @@ import {
   Phone,
   MapPin,
   Building,
-  Check
+  Check,
+  RefreshCw
 } from "lucide-react";
 
 interface QuickFillPreset {
@@ -74,12 +76,52 @@ export default function AdminRegistrationPage() {
   const [gender, setGender] = useState("male");
   const [dob, setDob] = useState("1996-06-15");
   const [age, setAge] = useState<number | string>(28);
+
+  // Automatically calculate age when DOB is selected
+  const handleDobChange = (newDob: string) => {
+    setDob(newDob);
+    if (!newDob) {
+      setAge("");
+      return;
+    }
+    const birthDate = new Date(newDob);
+    if (isNaN(birthDate.getTime())) return;
+
+    const today = new Date();
+    let calculatedAge = today.getFullYear() - birthDate.getFullYear();
+    const monthDiff = today.getMonth() - birthDate.getMonth();
+
+    if (monthDiff < 0 || (monthDiff === 0 && today.getDate() < birthDate.getDate())) {
+      calculatedAge--;
+    }
+
+    if (calculatedAge >= 0) {
+      setAge(calculatedAge);
+    }
+  };
+
   const [addressLine1, setAddressLine1] = useState("Ward 4, Hospital Road");
   const [state, setState] = useState("Odisha");
   const [district, setDistrict] = useState("Nayagarh");
   const [city, setCity] = useState("Nayagarh");
   const [block, setBlock] = useState("Khandapada");
   const [postalCode, setPostalCode] = useState("752077");
+
+  // Cascading location options: State -> District -> Block
+  const allStates = useMemo(() => getIndiaStates(), []);
+  const availableDistricts = useMemo(() => getDistrictsForState(state), [state]);
+  const availableBlocks = useMemo(() => getBlocksForDistrict(state, district), [state, district]);
+
+  const handleStateChange = (nextState: string) => {
+    setState(nextState);
+    setDistrict("");
+    setBlock("");
+  };
+
+  const handleDistrictChange = (nextDistrict: string) => {
+    setDistrict(nextDistrict);
+    setBlock("");
+  };
 
   // Patient Specific States
   const [bloodGroup, setBloodGroup] = useState("B+");
@@ -92,14 +134,107 @@ export default function AdminRegistrationPage() {
   const [emergencyContactName, setEmergencyContactName] = useState("Bijay Kumar Sahu");
   const [emergencyContactPhone, setEmergencyContactPhone] = useState("+91 94371 99120");
 
+  // Registered Facilities & Verification for Nurse/Doctor
+  const [registeredFacilities, setRegisteredFacilities] = useState<Array<{
+    id: string;
+    user_id: string;
+    facility_name: string;
+    city?: string;
+    district?: string;
+    state?: string;
+    department?: string;
+  }>>([]);
+  const [verifiedFacility, setVerifiedFacility] = useState<{
+    id: string;
+    user_id: string;
+    facility_name: string;
+    city?: string;
+    district?: string;
+    state?: string;
+    department?: string;
+  } | null>(null);
+  const [isVerifyingFacility, setIsVerifyingFacility] = useState(false);
+  const [facilityVerificationError, setFacilityVerificationError] = useState<string | null>(null);
+
+  // Load registered facilities from database
+  useEffect(() => {
+    let isMounted = true;
+    async function loadFacilities() {
+      try {
+        const res = await fetch("/api/admin/facilities");
+        const data = await res.json();
+        if (isMounted && data.success && Array.isArray(data.facilities)) {
+          setRegisteredFacilities(data.facilities);
+        }
+      } catch (err) {
+        console.warn("Failed to load facilities:", err);
+      }
+    }
+    loadFacilities();
+    return () => {
+      isMounted = false;
+    };
+  }, []);
+
+  // Real-time verification of facility against database
+  useEffect(() => {
+    const trimmed = primaryFacilityName.trim();
+    if (!trimmed) {
+      setVerifiedFacility(null);
+      setFacilityVerificationError(null);
+      setIsVerifyingFacility(false);
+      return;
+    }
+
+    // Check preloaded list for instant match
+    const localMatch = registeredFacilities.find(
+      (f) =>
+        (f.user_id && f.user_id.toLowerCase() === trimmed.toLowerCase()) ||
+        (f.facility_name && f.facility_name.toLowerCase() === trimmed.toLowerCase()) ||
+        (f.id && f.id.toLowerCase() === trimmed.toLowerCase())
+    );
+
+    if (localMatch) {
+      setVerifiedFacility(localMatch);
+      setFacilityVerificationError(null);
+      setIsVerifyingFacility(false);
+      return;
+    }
+
+    setIsVerifyingFacility(true);
+    const timer = setTimeout(async () => {
+      try {
+        const res = await fetch(`/api/admin/facilities?query=${encodeURIComponent(trimmed)}`);
+        const data = await res.json();
+        if (data.success && data.verified && data.facility) {
+          setVerifiedFacility(data.facility);
+          setFacilityVerificationError(null);
+        } else {
+          setVerifiedFacility(null);
+          setFacilityVerificationError(
+            `No registered facility found in database matching "${trimmed}".`
+          );
+        }
+      } catch (err) {
+        setVerifiedFacility(null);
+        setFacilityVerificationError("Failed to verify facility with database.");
+      } finally {
+        setIsVerifyingFacility(false);
+      }
+    }, 350);
+
+    return () => clearTimeout(timer);
+  }, [primaryFacilityName, registeredFacilities]);
+
   // Doctor Specific States
-  const [doctorId, setDoctorId] = useState("");
   const [medicalRegistrationNumber, setMedicalRegistrationNumber] = useState("");
-  const [specialization, setSpecialization] = useState("General Medicine & Emergency Care");
+  const [doctorStateCouncilReg, setDoctorStateCouncilReg] = useState("");
+  const [doctorHprId, setDoctorHprId] = useState("");
+  const [doctorDesignation, setDoctorDesignation] = useState("Senior Attending Physician & Clinical Specialist");
   const [qualification, setQualification] = useState("MBBS, MD (Medicine)");
   const [department, setDepartment] = useState("Department of General Medicine");
   const [roomNumber, setRoomNumber] = useState("OPD Room 102");
-  const [shiftTimings, setShiftTimings] = useState("08:00 AM - 02:00 PM");
+  const [doctorShiftSchedule, setDoctorShiftSchedule] = useState("Morning OPD (08:00 AM - 02:00 PM)");
   const [availabilityStatus, setAvailabilityStatus] = useState("Available");
   const [isAuthorizedReviewer, setIsAuthorizedReviewer] = useState(true);
 
@@ -110,11 +245,9 @@ export default function AdminRegistrationPage() {
   const [designation, setDesignation] = useState("Senior Staff Nurse & Triage Specialist");
   const [shiftSchedule, setShiftSchedule] = useState("Morning Roster (08:00 AM - 04:00 PM)");
 
-  // Medical / Pharmacy Specific States
-  const [pharmacyLicenseNumber, setPharmacyLicenseNumber] = useState("");
-  const [staffDesignation, setStaffDesignation] = useState("Registered Chief Pharmacist");
-  const [counterNumber, setCounterNumber] = useState("Jan Aushadhi Counter 1");
-  const [isJanAushadhiIncharge, setIsJanAushadhiIncharge] = useState(true);
+  // Facility / Pharmacy Specific States (matching facility_profiles schema: hpr_id, department)
+  const [facilityHprId, setFacilityHprId] = useState("");
+  const [facilityDepartment, setFacilityDepartment] = useState("Central Pharmacy & Lab");
 
   // Organization Specific States
   const [orgCode, setOrgCode] = useState("");
@@ -161,18 +294,19 @@ export default function AdminRegistrationPage() {
       const docCode = `DOC-${randomSuffix}`;
       setFullName("Dr. Ramesh Chandra Mohanty");
       setUserId(docCode);
-      setDoctorId(docCode);
       setPhone(randomPhone);
       setEmail(`dr.ramesh.${randomSuffix}@triageassist.org`);
       setGender("male");
       setDob("1984-08-22");
       setAge(40);
       setMedicalRegistrationNumber(`MCI-OD-2012-${randomSuffix}`);
-      setSpecialization("Emergency Medicine & Critical Care");
+      setDoctorStateCouncilReg(`MCI-OD-2012-${randomSuffix}`);
+      setDoctorHprId(`91-7712-${randomSuffix}-4402@hpr`);
+      setDoctorDesignation("Senior Attending Physician & Clinical Specialist");
       setQualification("MBBS, MD (Emergency Medicine)");
       setDepartment("Department of Medicine & Emergency OPD");
       setRoomNumber("OPD Room 102");
-      setShiftTimings("08:00 AM - 02:00 PM");
+      setDoctorShiftSchedule("Morning OPD (08:00 AM - 02:00 PM)");
       setAvailabilityStatus("Available");
       setIsAuthorizedReviewer(true);
       setPrimaryFacilityName("Community Health Centre (CHC) Khandapada");
@@ -193,20 +327,22 @@ export default function AdminRegistrationPage() {
       setPrimaryFacilityName("Community Health Centre (CHC) Khandapada");
     } else if (activeRole === "facility" || activeRole === "medical") {
       const medCode = `FAC-${randomSuffix.toString().slice(0, 3)}`;
-      setFullName("Subrat Kumar Sahu");
+      setFullName("Jan Aushadhi Kendra & CHC Pathology Counter");
       setUserId(medCode);
-      setStaffId(medCode);
       setPhone(randomPhone);
-      setEmail(`subrat.pharmacy.${randomSuffix}@triageassist.org`);
-      setGender("male");
-      setDob("1989-02-18");
-      setAge(35);
-      setPharmacyLicenseNumber(`DL-OD-NAY-2021-${randomSuffix}`);
-      setStaffDesignation("Registered Pharmacist & Jan Aushadhi Incharge");
-      setDepartment("Central Pharmacy & Lab");
-      setCounterNumber("Dispensary Desk 1");
-      setIsJanAushadhiIncharge(true);
-      setPrimaryFacilityName("Jan Aushadhi Kendra & CHC Pathology Counter");
+      setEmail(`facility.khandapada.${randomSuffix}@triageassist.org`);
+      setGender("other");
+      setDob("");
+      setAge("");
+      setAddressLine1("Hospital Road, Main CHC Campus");
+      setCity("Khandapada");
+      setDistrict("Nayagarh");
+      setBlock("Khandapada");
+      setState("Odisha");
+      setPostalCode("752077");
+      setFacilityHprId(`91-7712-${randomSuffix}-4402@hpr`);
+      setFacilityDepartment("Central Pharmacy & Lab");
+      setPrimaryFacilityName("");
     } else if (activeRole === "organization") {
       const orgUnique = `ORG-NALCO-${randomSuffix.toString().slice(0, 3)}`;
       setFullName("NALCO Smelter & Power Complex");
@@ -260,7 +396,8 @@ export default function AdminRegistrationPage() {
     setEmail("");
     setPatientOrgName("");
     setIdInOrg("");
-    setDoctorId("");
+    setDoctorStateCouncilReg("");
+    setDoctorHprId("");
     setStaffId("");
     setOrgCode("");
     setCampId("");
@@ -303,7 +440,8 @@ export default function AdminRegistrationPage() {
         city,
         block,
         postalCode,
-        primaryFacilityName,
+        primaryFacilityName: verifiedFacility?.facility_name || primaryFacilityName,
+        facilityId: verifiedFacility?.id || null,
       };
 
       if (activeRole === "patient") {
@@ -316,27 +454,29 @@ export default function AdminRegistrationPage() {
         payload.emergencyContactName = emergencyContactName;
         payload.emergencyContactPhone = emergencyContactPhone;
       } else if (activeRole === "doctor") {
-        payload.doctorId = doctorId || userId;
         payload.medicalRegistrationNumber = medicalRegistrationNumber;
-        payload.specialization = specialization;
+        payload.stateCouncilReg = doctorStateCouncilReg || medicalRegistrationNumber;
+        payload.hprId = doctorHprId;
+        payload.designation = doctorDesignation;
         payload.qualification = qualification;
         payload.department = department;
         payload.roomNumber = roomNumber;
-        payload.shiftTimings = shiftTimings;
+        payload.shiftSchedule = doctorShiftSchedule;
         payload.availabilityStatus = availabilityStatus;
         payload.isAuthorizedReviewer = isAuthorizedReviewer;
+        payload.facilityId = verifiedFacility?.id || null;
+        payload.primaryFacilityName = verifiedFacility?.facility_name || primaryFacilityName;
       } else if (activeRole === "nurse") {
         payload.staffId = staffId || userId;
         payload.stateCouncilReg = stateCouncilReg;
         payload.hprId = hprId;
         payload.designation = designation;
         payload.shiftSchedule = shiftSchedule;
+        payload.facilityId = verifiedFacility?.id || null;
+        payload.primaryFacilityName = verifiedFacility?.facility_name || primaryFacilityName;
       } else if (activeRole === "facility" || activeRole === "medical") {
-        payload.staffId = staffId || userId;
-        payload.pharmacyLicenseNumber = pharmacyLicenseNumber;
-        payload.staffDesignation = staffDesignation;
-        payload.counterNumber = counterNumber;
-        payload.isJanAushadhiIncharge = isJanAushadhiIncharge;
+        payload.hprId = facilityHprId;
+        payload.department = facilityDepartment;
       } else if (activeRole === "organization") {
         payload.orgCode = orgCode || userId;
         payload.orgName = orgName || fullName;
@@ -523,14 +663,29 @@ export default function AdminRegistrationPage() {
             <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
               <div>
                 <label className="block text-xs font-semibold text-slate-300 mb-1">
-                  Full Legal / Professional Name <span className="text-rose-400">*</span>
+                  {activeRole === "facility" || activeRole === "medical"
+                    ? "Facility / Centre Name"
+                    : activeRole === "organization"
+                    ? "Organization Name"
+                    : activeRole === "healthcamp"
+                    ? "Camp / MMU Name"
+                    : "Full Legal / Professional Name"}{" "}
+                  <span className="text-rose-400">*</span>
                 </label>
                 <input
                   type="text"
                   required
                   value={fullName}
                   onChange={(e) => setFullName(e.target.value)}
-                  placeholder="e.g. Dr. Ramesh Mohanty"
+                  placeholder={
+                    activeRole === "facility" || activeRole === "medical"
+                      ? "e.g. Jan Aushadhi Kendra & CHC Pathology Counter"
+                      : activeRole === "organization"
+                      ? "e.g. NALCO Smelter & Power Complex"
+                      : activeRole === "healthcamp"
+                      ? "e.g. Nayagarh Mobile Medical Outreach Fleet #4"
+                      : "e.g. Dr. Ramesh Mohanty"
+                  }
                   className="w-full bg-slate-900 border border-slate-700 rounded-xl px-3.5 py-2 text-xs sm:text-sm text-white placeholder-slate-500 focus:outline-none focus:border-teal-400"
                 />
               </div>
@@ -605,17 +760,124 @@ export default function AdminRegistrationPage() {
                 </div>
               </div>
 
-              <div>
-                <label className="block text-xs font-semibold text-slate-300 mb-1">
-                  Assigned Facility
-                </label>
-                <input
-                  type="text"
-                  value={primaryFacilityName}
-                  onChange={(e) => setPrimaryFacilityName(e.target.value)}
-                  className="w-full bg-slate-900 border border-slate-700 rounded-xl px-3.5 py-2 text-xs sm:text-sm text-white focus:outline-none focus:border-teal-400"
-                />
-              </div>
+              {activeRole !== "facility" && activeRole !== "medical" && activeRole !== "organization" && activeRole !== "healthcamp" && (
+                <div className="space-y-1.5 sm:col-span-2 lg:col-span-1">
+                  <div className="flex items-center justify-between">
+                    <label className="block text-xs font-semibold text-slate-300">
+                      Assigned Facility {activeRole === "nurse" && <span className="text-teal-400 font-normal">(Database Verification)</span>}
+                    </label>
+                    {isVerifyingFacility ? (
+                      <span className="text-[10px] text-teal-400 flex items-center gap-1 font-mono">
+                        <RefreshCw className="w-3 h-3 animate-spin" /> Verifying...
+                      </span>
+                    ) : verifiedFacility ? (
+                      <span className="text-[10px] font-bold text-emerald-400 flex items-center gap-1">
+                        <CheckCircle2 className="w-3 h-3 text-emerald-400" /> Database Verified
+                      </span>
+                    ) : primaryFacilityName.trim() ? (
+                      <span className="text-[10px] font-bold text-rose-400 flex items-center gap-1">
+                        <AlertCircle className="w-3 h-3 text-rose-400" /> Not Verified
+                      </span>
+                    ) : null}
+                  </div>
+
+                  <div className="relative">
+                    <input
+                      type="text"
+                      list="admin-registered-facilities"
+                      value={primaryFacilityName}
+                      onChange={(e) => setPrimaryFacilityName(e.target.value)}
+                      placeholder="e.g. FAC-357 or Jan Aushadhi Kendra"
+                      className={`w-full bg-slate-900 border rounded-xl px-3.5 py-2 text-xs sm:text-sm text-white focus:outline-none transition-colors ${
+                        verifiedFacility
+                          ? "border-emerald-500/80 focus:border-emerald-400 ring-1 ring-emerald-500/30"
+                          : primaryFacilityName.trim()
+                          ? "border-rose-500/80 focus:border-rose-400 ring-1 ring-rose-500/30"
+                          : "border-slate-700 focus:border-teal-400"
+                      }`}
+                    />
+                    {verifiedFacility && (
+                      <CheckCircle2 className="w-4 h-4 text-emerald-400 absolute right-3 top-2.5 pointer-events-none" />
+                    )}
+                  </div>
+
+                  <datalist id="admin-registered-facilities">
+                    {registeredFacilities.map((fac) => (
+                      <option key={fac.id} value={fac.facility_name}>
+                        {fac.user_id ? `[${fac.user_id}] ` : ""}{fac.facility_name} ({fac.city || fac.district || "Registered"})
+                      </option>
+                    ))}
+                  </datalist>
+
+                  {/* Verification Status Details */}
+                  {verifiedFacility ? (
+                    <div className="p-2.5 bg-emerald-950/40 border border-emerald-500/40 rounded-xl flex items-center justify-between gap-2 text-xs animate-in fade-in duration-200">
+                      <div className="flex items-start gap-2">
+                        <CheckCircle2 className="w-4 h-4 text-emerald-400 shrink-0 mt-0.5" />
+                        <div>
+                          <div className="font-bold text-emerald-300">
+                            Verified: {verifiedFacility.facility_name} {verifiedFacility.user_id && `[${verifiedFacility.user_id}]`}
+                          </div>
+                          <div className="text-[11px] text-emerald-400/80 font-mono mt-0.5">
+                            Facility ID: <span className="underline">{verifiedFacility.id}</span>
+                            {verifiedFacility.city && ` • ${verifiedFacility.city}`}
+                            {verifiedFacility.district && `, ${verifiedFacility.district}`}
+                          </div>
+                        </div>
+                      </div>
+                      <span className="px-2 py-0.5 bg-emerald-500/20 text-emerald-300 text-[10px] font-bold rounded-full border border-emerald-500/40 shrink-0">
+                        ID Linked ✓
+                      </span>
+                    </div>
+                  ) : primaryFacilityName.trim() && !isVerifyingFacility ? (
+                    <div className="p-2.5 bg-rose-950/40 border border-rose-500/40 rounded-xl flex items-center justify-between gap-2 text-xs animate-in fade-in duration-200">
+                      <div className="flex items-start gap-2">
+                        <AlertCircle className="w-4 h-4 text-rose-400 shrink-0 mt-0.5" />
+                        <div>
+                          <div className="font-bold text-rose-300">
+                            Facility Not Found in Database
+                          </div>
+                          <div className="text-[11px] text-rose-400/80 mt-0.5">
+                            {facilityVerificationError || "No registered facility found in database. Enter a valid facility name or code."}
+                          </div>
+                        </div>
+                      </div>
+                      <span className="px-2 py-0.5 bg-rose-500/20 text-rose-300 text-[10px] font-bold rounded-full border border-rose-500/40 shrink-0">
+                        Unverified ✕
+                      </span>
+                    </div>
+                  ) : null}
+
+                  {/* Registered Facilities Quick-Pills */}
+                  {registeredFacilities.length > 0 && (
+                    <div className="pt-1">
+                      <span className="text-[10px] font-bold text-slate-400 uppercase tracking-wider block mb-1">
+                        Registered Facilities in Database:
+                      </span>
+                      <div className="flex flex-wrap gap-1.5">
+                        {registeredFacilities.slice(0, 4).map((f) => (
+                          <button
+                            key={f.id}
+                            type="button"
+                            onClick={() => {
+                              setPrimaryFacilityName(f.facility_name);
+                              setVerifiedFacility(f);
+                              setFacilityVerificationError(null);
+                            }}
+                            className={`px-2 py-1 rounded-lg text-[11px] font-semibold border transition-all cursor-pointer ${
+                              verifiedFacility?.id === f.id
+                                ? "bg-teal-500/20 border-teal-400 text-teal-200"
+                                : "bg-slate-900 border-slate-700 text-slate-300 hover:border-slate-500 hover:text-white"
+                            }`}
+                          >
+                            {f.user_id ? `[${f.user_id}] ` : ""}{f.facility_name}
+                          </button>
+                        ))}
+                      </div>
+                    </div>
+                  )}
+                </div>
+              )}
             </div>
           </div>
 
@@ -624,53 +886,131 @@ export default function AdminRegistrationPage() {
             <div className="flex items-center gap-2 border-b border-slate-700 pb-2">
               <MapPin className="w-4 h-4 text-teal-400" />
               <h2 className="text-sm font-bold uppercase tracking-wider text-slate-200">
-                2. Demographics & Address Information
+                {activeRole === "facility" || activeRole === "medical" || activeRole === "organization" || activeRole === "healthcamp"
+                  ? "2. Facility Location & Address Information"
+                  : "2. Demographics & Address Information"}
               </h2>
             </div>
 
             <div className="grid grid-cols-2 sm:grid-cols-4 lg:grid-cols-6 gap-4">
-              <div>
-                <label className="block text-xs font-semibold text-slate-300 mb-1">Gender</label>
-                <select
-                  value={gender}
-                  onChange={(e) => setGender(e.target.value)}
-                  className="w-full bg-slate-900 border border-slate-700 rounded-xl px-3 py-2 text-xs sm:text-sm text-white focus:outline-none focus:border-teal-400"
-                >
-                  <option value="male">Male</option>
-                  <option value="female">Female</option>
-                  <option value="other">Other</option>
-                </select>
-              </div>
+              {activeRole !== "facility" && activeRole !== "medical" && activeRole !== "organization" && activeRole !== "healthcamp" && (
+                <>
+                  <div>
+                    <label className="block text-xs font-semibold text-slate-300 mb-1">Gender</label>
+                    <select
+                      value={gender}
+                      onChange={(e) => setGender(e.target.value)}
+                      className="w-full bg-slate-900 border border-slate-700 rounded-xl px-3 py-2 text-xs sm:text-sm text-white focus:outline-none focus:border-teal-400"
+                    >
+                      <option value="male">Male</option>
+                      <option value="female">Female</option>
+                      <option value="other">Other</option>
+                    </select>
+                  </div>
 
-              <div>
-                <label className="block text-xs font-semibold text-slate-300 mb-1">Date of Birth</label>
-                <input
-                  type="date"
-                  value={dob}
-                  onChange={(e) => setDob(e.target.value)}
-                  className="w-full bg-slate-900 border border-slate-700 rounded-xl px-3 py-2 text-xs sm:text-sm text-white focus:outline-none focus:border-teal-400"
-                >
-                </input>
-              </div>
+                  <div>
+                    <label className="block text-xs font-semibold text-slate-300 mb-1">Date of Birth</label>
+                    <input
+                      type="date"
+                      value={dob}
+                      onChange={(e) => handleDobChange(e.target.value)}
+                      className="w-full bg-slate-900 border border-slate-700 rounded-xl px-3 py-2 text-xs sm:text-sm text-white focus:outline-none focus:border-teal-400"
+                    />
+                  </div>
 
-              <div>
-                <label className="block text-xs font-semibold text-slate-300 mb-1">Age</label>
-                <input
-                  type="number"
-                  value={age}
-                  onChange={(e) => setAge(e.target.value)}
-                  className="w-full bg-slate-900 border border-slate-700 rounded-xl px-3 py-2 text-xs sm:text-sm text-white focus:outline-none focus:border-teal-400"
-                />
-              </div>
+                  <div>
+                    <label className="block text-xs font-semibold text-slate-300 mb-1">Age</label>
+                    <input
+                      type="number"
+                      value={age}
+                      onChange={(e) => setAge(e.target.value)}
+                      className="w-full bg-slate-900 border border-slate-700 rounded-xl px-3 py-2 text-xs sm:text-sm text-white focus:outline-none focus:border-teal-400"
+                    />
+                  </div>
+                </>
+              )}
 
-              <div className="col-span-2 sm:col-span-3">
-                <label className="block text-xs font-semibold text-slate-300 mb-1">Address Line 1</label>
+              <div className={activeRole === "facility" || activeRole === "medical" || activeRole === "organization" || activeRole === "healthcamp" ? "col-span-2 sm:col-span-4 lg:col-span-3" : "col-span-2 sm:col-span-3"}>
+                <label className="block text-xs font-semibold text-slate-300 mb-1">
+                  {activeRole === "facility" || activeRole === "medical" ? "Facility Address Line 1" : "Address Line 1"}
+                </label>
                 <input
                   type="text"
                   value={addressLine1}
                   onChange={(e) => setAddressLine1(e.target.value)}
+                  placeholder="e.g. Hospital Road, Main CHC Campus"
                   className="w-full bg-slate-900 border border-slate-700 rounded-xl px-3 py-2 text-xs sm:text-sm text-white focus:outline-none focus:border-teal-400"
                 />
+              </div>
+
+              <div>
+                <label className="block text-xs font-semibold text-slate-300 mb-1">State</label>
+                <select
+                  value={state}
+                  onChange={(e) => handleStateChange(e.target.value)}
+                  className="w-full bg-slate-900 border border-slate-700 rounded-xl px-3 py-2 text-xs sm:text-sm text-white focus:outline-none focus:border-teal-400 cursor-pointer"
+                >
+                  <option value="">Select State / UT</option>
+                  {allStates.map((st) => (
+                    <option key={st} value={st} className="bg-slate-900 text-white">
+                      {st}
+                    </option>
+                  ))}
+                </select>
+              </div>
+
+              <div>
+                <label className="block text-xs font-semibold text-slate-300 mb-1">District</label>
+                {availableDistricts.length > 0 ? (
+                  <select
+                    value={district}
+                    onChange={(e) => handleDistrictChange(e.target.value)}
+                    className="w-full bg-slate-900 border border-slate-700 rounded-xl px-3 py-2 text-xs sm:text-sm text-white focus:outline-none focus:border-teal-400 cursor-pointer"
+                  >
+                    <option value="">{state ? "Select District" : "Select State First"}</option>
+                    {availableDistricts.map((d) => (
+                      <option key={d} value={d} className="bg-slate-900 text-white">
+                        {d}
+                      </option>
+                    ))}
+                  </select>
+                ) : (
+                  <input
+                    type="text"
+                    disabled={!state}
+                    placeholder={state ? "Enter district" : "Select state first"}
+                    value={district}
+                    onChange={(e) => handleDistrictChange(e.target.value)}
+                    className="w-full bg-slate-900 border border-slate-700 rounded-xl px-3 py-2 text-xs sm:text-sm text-white focus:outline-none focus:border-teal-400 disabled:opacity-50"
+                  />
+                )}
+              </div>
+
+              <div>
+                <label className="block text-xs font-semibold text-slate-300 mb-1">Block</label>
+                {availableBlocks.length > 0 ? (
+                  <select
+                    value={block}
+                    onChange={(e) => setBlock(e.target.value)}
+                    className="w-full bg-slate-900 border border-slate-700 rounded-xl px-3 py-2 text-xs sm:text-sm text-white focus:outline-none focus:border-teal-400 cursor-pointer"
+                  >
+                    <option value="">{district ? "Select Block" : "Select District First"}</option>
+                    {availableBlocks.map((b) => (
+                      <option key={b} value={b} className="bg-slate-900 text-white">
+                        {b}
+                      </option>
+                    ))}
+                  </select>
+                ) : (
+                  <input
+                    type="text"
+                    disabled={!district}
+                    placeholder={district ? "Enter block" : "Select district first"}
+                    value={block}
+                    onChange={(e) => setBlock(e.target.value)}
+                    className="w-full bg-slate-900 border border-slate-700 rounded-xl px-3 py-2 text-xs sm:text-sm text-white focus:outline-none focus:border-teal-400 disabled:opacity-50"
+                  />
+                )}
               </div>
 
               <div>
@@ -679,36 +1019,6 @@ export default function AdminRegistrationPage() {
                   type="text"
                   value={city}
                   onChange={(e) => setCity(e.target.value)}
-                  className="w-full bg-slate-900 border border-slate-700 rounded-xl px-3 py-2 text-xs sm:text-sm text-white focus:outline-none focus:border-teal-400"
-                />
-              </div>
-
-              <div>
-                <label className="block text-xs font-semibold text-slate-300 mb-1">District</label>
-                <input
-                  type="text"
-                  value={district}
-                  onChange={(e) => setDistrict(e.target.value)}
-                  className="w-full bg-slate-900 border border-slate-700 rounded-xl px-3 py-2 text-xs sm:text-sm text-white focus:outline-none focus:border-teal-400"
-                />
-              </div>
-
-              <div>
-                <label className="block text-xs font-semibold text-slate-300 mb-1">Block</label>
-                <input
-                  type="text"
-                  value={block}
-                  onChange={(e) => setBlock(e.target.value)}
-                  className="w-full bg-slate-900 border border-slate-700 rounded-xl px-3 py-2 text-xs sm:text-sm text-white focus:outline-none focus:border-teal-400"
-                />
-              </div>
-
-              <div>
-                <label className="block text-xs font-semibold text-slate-300 mb-1">State</label>
-                <input
-                  type="text"
-                  value={state}
-                  onChange={(e) => setState(e.target.value)}
                   className="w-full bg-slate-900 border border-slate-700 rounded-xl px-3 py-2 text-xs sm:text-sm text-white focus:outline-none focus:border-teal-400"
                 />
               </div>
@@ -850,19 +1160,6 @@ export default function AdminRegistrationPage() {
               <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4 bg-slate-900/50 p-4 rounded-xl border border-slate-700/60">
                 <div>
                   <label className="block text-xs font-semibold text-slate-300 mb-1">
-                    Doctor ID (doctor_id) <span className="text-rose-400">*</span>
-                  </label>
-                  <input
-                    type="text"
-                    value={doctorId}
-                    onChange={(e) => setDoctorId(e.target.value)}
-                    placeholder="e.g. DOC-4412"
-                    className="w-full bg-slate-900 border border-slate-700 rounded-xl px-3 py-2 text-xs sm:text-sm text-white font-mono focus:outline-none focus:border-teal-400"
-                  />
-                </div>
-
-                <div>
-                  <label className="block text-xs font-semibold text-slate-300 mb-1">
                     Medical Reg. No (MCI / State Council) <span className="text-rose-400">*</span>
                   </label>
                   <input
@@ -875,11 +1172,40 @@ export default function AdminRegistrationPage() {
                 </div>
 
                 <div>
-                  <label className="block text-xs font-semibold text-slate-300 mb-1">Specialization</label>
+                  <label className="block text-xs font-semibold text-slate-300 mb-1">
+                    State Council Registration No.
+                  </label>
                   <input
                     type="text"
-                    value={specialization}
-                    onChange={(e) => setSpecialization(e.target.value)}
+                    value={doctorStateCouncilReg}
+                    onChange={(e) => setDoctorStateCouncilReg(e.target.value)}
+                    placeholder="e.g. MCI-OD-2012-9041"
+                    className="w-full bg-slate-900 border border-slate-700 rounded-xl px-3 py-2 text-xs sm:text-sm text-white focus:outline-none focus:border-teal-400"
+                  />
+                </div>
+
+                <div>
+                  <label className="block text-xs font-semibold text-slate-300 mb-1">
+                    HPR ID (ABDM Healthcare Professional ID)
+                  </label>
+                  <input
+                    type="text"
+                    value={doctorHprId}
+                    onChange={(e) => setDoctorHprId(e.target.value)}
+                    placeholder="e.g. 91-7712-3321-4402@hpr"
+                    className="w-full bg-slate-900 border border-slate-700 rounded-xl px-3 py-2 text-xs sm:text-sm text-white font-mono focus:outline-none focus:border-teal-400"
+                  />
+                </div>
+
+                <div>
+                  <label className="block text-xs font-semibold text-slate-300 mb-1">
+                    Designation & Clinical Role
+                  </label>
+                  <input
+                    type="text"
+                    value={doctorDesignation}
+                    onChange={(e) => setDoctorDesignation(e.target.value)}
+                    placeholder="e.g. Senior Attending Physician & Clinical Specialist"
                     className="w-full bg-slate-900 border border-slate-700 rounded-xl px-3 py-2 text-xs sm:text-sm text-white focus:outline-none focus:border-teal-400"
                   />
                 </div>
@@ -890,6 +1216,7 @@ export default function AdminRegistrationPage() {
                     type="text"
                     value={qualification}
                     onChange={(e) => setQualification(e.target.value)}
+                    placeholder="e.g. MBBS, MD"
                     className="w-full bg-slate-900 border border-slate-700 rounded-xl px-3 py-2 text-xs sm:text-sm text-white focus:outline-none focus:border-teal-400"
                   />
                 </div>
@@ -900,6 +1227,7 @@ export default function AdminRegistrationPage() {
                     type="text"
                     value={department}
                     onChange={(e) => setDepartment(e.target.value)}
+                    placeholder="e.g. Department of Medicine"
                     className="w-full bg-slate-900 border border-slate-700 rounded-xl px-3 py-2 text-xs sm:text-sm text-white focus:outline-none focus:border-teal-400"
                   />
                 </div>
@@ -910,16 +1238,18 @@ export default function AdminRegistrationPage() {
                     type="text"
                     value={roomNumber}
                     onChange={(e) => setRoomNumber(e.target.value)}
+                    placeholder="e.g. OPD Room 102"
                     className="w-full bg-slate-900 border border-slate-700 rounded-xl px-3 py-2 text-xs sm:text-sm text-white focus:outline-none focus:border-teal-400"
                   />
                 </div>
 
                 <div>
-                  <label className="block text-xs font-semibold text-slate-300 mb-1">Shift Timings</label>
+                  <label className="block text-xs font-semibold text-slate-300 mb-1">Shift Schedule / Roster</label>
                   <input
                     type="text"
-                    value={shiftTimings}
-                    onChange={(e) => setShiftTimings(e.target.value)}
+                    value={doctorShiftSchedule}
+                    onChange={(e) => setDoctorShiftSchedule(e.target.value)}
+                    placeholder="e.g. Morning OPD (08:00 AM - 02:00 PM)"
                     className="w-full bg-slate-900 border border-slate-700 rounded-xl px-3 py-2 text-xs sm:text-sm text-white focus:outline-none focus:border-teal-400"
                   />
                 </div>
@@ -1005,64 +1335,33 @@ export default function AdminRegistrationPage() {
 
             {/* FACILITY / MEDICAL FIELDS */}
             {(activeRole === "facility" || activeRole === "medical") && (
-              <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4 bg-slate-900/50 p-4 rounded-xl border border-slate-700/60">
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 bg-slate-900/50 p-4 rounded-xl border border-slate-700/60">
                 <div>
                   <label className="block text-xs font-semibold text-slate-300 mb-1">
-                    Staff ID (staff_id) <span className="text-rose-400">*</span>
+                    ABDM HPR ID (hpr_id) <span className="text-rose-400">*</span>
                   </label>
                   <input
                     type="text"
-                    value={staffId}
-                    onChange={(e) => setStaffId(e.target.value)}
-                    placeholder="e.g. FAC-001"
-                    className="w-full bg-slate-900 border border-slate-700 rounded-xl px-3 py-2 text-xs sm:text-sm text-white font-mono focus:outline-none focus:border-teal-400"
+                    value={facilityHprId}
+                    onChange={(e) => setFacilityHprId(e.target.value)}
+                    placeholder="e.g. 91-7712-3321-4402@hpr"
+                    className="w-full bg-slate-900 border border-slate-700 rounded-xl px-3 py-2 text-xs sm:text-sm text-white focus:outline-none focus:border-teal-400"
                   />
+                  <p className="text-[11px] text-slate-400 mt-1">Healthcare Professional Registry ID of facility incharge</p>
                 </div>
 
                 <div>
                   <label className="block text-xs font-semibold text-slate-300 mb-1">
-                    Pharmacy Drug License Number
+                    Department (department) <span className="text-rose-400">*</span>
                   </label>
                   <input
                     type="text"
-                    value={pharmacyLicenseNumber}
-                    onChange={(e) => setPharmacyLicenseNumber(e.target.value)}
-                    placeholder="e.g. DL-OD-NAY-2022-819"
+                    value={facilityDepartment}
+                    onChange={(e) => setFacilityDepartment(e.target.value)}
+                    placeholder="e.g. Central Pharmacy & Lab"
                     className="w-full bg-slate-900 border border-slate-700 rounded-xl px-3 py-2 text-xs sm:text-sm text-white focus:outline-none focus:border-teal-400"
                   />
-                </div>
-
-                <div>
-                  <label className="block text-xs font-semibold text-slate-300 mb-1">Designation</label>
-                  <input
-                    type="text"
-                    value={staffDesignation}
-                    onChange={(e) => setStaffDesignation(e.target.value)}
-                    className="w-full bg-slate-900 border border-slate-700 rounded-xl px-3 py-2 text-xs sm:text-sm text-white focus:outline-none focus:border-teal-400"
-                  />
-                </div>
-
-                <div>
-                  <label className="block text-xs font-semibold text-slate-300 mb-1">Counter Number</label>
-                  <input
-                    type="text"
-                    value={counterNumber}
-                    onChange={(e) => setCounterNumber(e.target.value)}
-                    className="w-full bg-slate-900 border border-slate-700 rounded-xl px-3 py-2 text-xs sm:text-sm text-white focus:outline-none focus:border-teal-400"
-                  />
-                </div>
-
-                <div className="flex items-center gap-2 pt-6">
-                  <input
-                    type="checkbox"
-                    id="janAushadhi"
-                    checked={isJanAushadhiIncharge}
-                    onChange={(e) => setIsJanAushadhiIncharge(e.target.checked)}
-                    className="w-4 h-4 rounded text-teal-500 focus:ring-teal-400"
-                  />
-                  <label htmlFor="janAushadhi" className="text-xs font-semibold text-slate-200 cursor-pointer">
-                    Jan Aushadhi Dispensary Incharge
-                  </label>
+                  <p className="text-[11px] text-slate-400 mt-1">Primary operational wing or counter unit</p>
                 </div>
               </div>
             )}

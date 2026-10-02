@@ -29,7 +29,7 @@ export const profiles = pgTable("profiles", {
 // ==============================================================================
 export const patientProfiles = pgTable("patient_profiles", {
   id: uuid("id").defaultRandom().primaryKey(),
-  profileId: uuid("profile_id").references(() => profiles.id).unique().notNull(),
+  profileId: uuid("profile_id").references(() => profiles.id, { onDelete: "cascade" }).unique().notNull(),
   bloodGroup: text("blood_group"),
   disability: text("disability").default("No").notNull(),
   primaryFacilityName: text("primary_facility_name").default("Community Health Centre (CHC) Khandapada"),
@@ -72,7 +72,7 @@ export type NewPatient = typeof newPatient.$inferSelect;
 // ==============================================================================
 export const doctorProfiles = pgTable("doctor_profiles", {
   id: uuid("id").defaultRandom().primaryKey(),
-  profileId: uuid("profile_id").references(() => profiles.id).unique().notNull(),
+  profileId: uuid("profile_id").references(() => profiles.id, { onDelete: "cascade" }).unique().notNull(),
   medicalRegistrationNumber: text("medical_registration_number").notNull(), // e.g. "MCI-2014-88912"
   stateCouncilReg: text("state_council_reg"), // e.g. "MCI-2014-88912"
   hprId: text("hpr_id"), // e.g. "91-7712-3321-4402@hpr"
@@ -80,7 +80,7 @@ export const doctorProfiles = pgTable("doctor_profiles", {
   qualification: text("qualification").default("MBBS, MD").notNull(),
   department: text("department").default("Department of Medicine").notNull(),
   roomNumber: text("room_number").default("OPD Room 102"),
-  facilityId: uuid("facility_id").references(() => profiles.id), // references profiles table where role = 'facility'
+  facilityId: uuid("facility_id").references(() => profiles.id, { onDelete: "cascade" }), // references profiles table where role = 'facility'
   facilityName: text("facility_name").default("Community Health Centre (CHC) Khandapada"),
   shiftSchedule: text("shift_schedule").default("Morning OPD (08:00 AM - 02:00 PM)"),
   availabilityStatus: text("availability_status").default("Available").notNull(),
@@ -101,26 +101,21 @@ export type DoctorProfile = typeof doctorProfiles.$inferSelect;
 // ==============================================================================
 export const facilityProfiles = pgTable("facility_profiles", {
   id: uuid("id").defaultRandom().primaryKey(),
-  profileId: uuid("profile_id").references(() => profiles.id).unique().notNull(),
-  staffId: text("staff_id").unique().notNull(), // e.g. "FAC-001"
-  pharmacyLicenseNumber: text("pharmacy_license_number").default("DL-OD-NAY-2022-819"),
+  profileId: uuid("profile_id").references(() => profiles.id, { onDelete: "cascade" }).unique().notNull(),
+  hprId: text("hpr_id"), // e.g. "91-7712-3321-4402@hpr"
   department: text("department").default("Central Pharmacy & Lab").notNull(),
-  staffDesignation: text("staff_designation").default("Registered Pharmacist").notNull(),
-  facilityId: uuid("facility_id"),
-  facilityName: text("facility_name").default("Jan Aushadhi Kendra & CHC Pathology Counter"),
-  counterNumber: text("counter_number").default("Dispensary Desk 1"),
-  isJanAushadhiIncharge: boolean("is_jan_aushadhi_incharge").default(true).notNull(),
   metadata: jsonb("metadata").default({}),
   createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
   updatedAt: timestamp("updated_at", { withTimezone: true }).defaultNow().notNull(),
 });
+export type FacilityProfile = typeof facilityProfiles.$inferSelect;
 
 // ==============================================================================
 // 1.4 Health Camp / MMU Outreach Role Profile
 // ==============================================================================
 export const healthcampProfiles = pgTable("healthcamp_profiles", {
   id: uuid("id").defaultRandom().primaryKey(),
-  profileId: uuid("profile_id").references(() => profiles.id).unique().notNull(),
+  profileId: uuid("profile_id").references(() => profiles.id, { onDelete: "cascade" }).unique().notNull(),
   campId: text("camp_id").unique().notNull(), // e.g. "CMP-001"
   mmuUnitCode: text("mmu_unit_code").default("MMU-OD-04").notNull(),
   campName: text("camp_name").notNull(),
@@ -134,62 +129,15 @@ export const healthcampProfiles = pgTable("healthcamp_profiles", {
 });
 
 // ==============================================================================
-// 2. PHC Facilities (Primary Health Centres & Community Health Centres)
-// ==============================================================================
-export const phcFacilities = pgTable("phc_facilities", {
-  id: uuid("id").defaultRandom().primaryKey(),
-  facilityName: text("facility_name").notNull(),
-  abdmFacilityCode: text("abdm_facility_code").unique().notNull(), // e.g. "PHC-OD-NAY-042"
-  facilityType: text("facility_type").default("CHC").notNull(),
-  district: text("district").notNull(),
-  state: text("state").notNull().default("Odisha"),
-  address: text("address"),
-  pincode: text("pincode"),
-  totalBeds: integer("total_beds").default(30).notNull(),
-  occupiedBeds: integer("occupied_beds").default(18).notNull(),
-  availableBeds: integer("available_beds").default(12).notNull(),
-  icuBedsTotal: integer("icu_beds_total").default(6).notNull(),
-  icuBedsAvailable: integer("icu_beds_available").default(2).notNull(),
-  oxygenCylindersAvailable: integer("oxygen_cylinders_available").default(14).notNull(),
-  bloodUnitsAvailable: integer("blood_units_available").default(24).notNull(),
-  ambulanceReady: boolean("ambulance_ready").default(true).notNull(),
-  emergencyContact: text("emergency_contact").default("108").notNull(),
-  isActive: boolean("is_active").default(true).notNull(),
-  metadata: jsonb("metadata").default({}),
-  createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
-  updatedAt: timestamp("updated_at", { withTimezone: true }).defaultNow().notNull(),
-});
-
-// ==============================================================================
-// 3. PHC Staff Roster & Real-time Duty Availability
-// ==============================================================================
-export const phcStaffRoster = pgTable("phc_staff_roster", {
-  id: uuid("id").defaultRandom().primaryKey(),
-  facilityId: uuid("facility_id").references(() => phcFacilities.id),
-  profileId: uuid("profile_id").references(() => profiles.id),
-  staffName: text("staff_name").notNull(),
-  staffRole: text("staff_role").notNull(), // "Doctor", "Authorized clinical reviewer", "Nurse", "Pharmacist", "Lab Technician"
-  department: text("department").notNull(),
-  status: text("status").default("Available").notNull(), // 'Available', 'Busy', 'Offline', 'On Standby'
-  currentTask: text("current_task"),
-  contactExt: text("contact_ext"),
-  phone: text("phone"),
-  shiftTimings: text("shift_timings").default("08:00 AM - 04:00 PM"),
-  isAuthorizedReviewer: boolean("is_authorized_reviewer").default(false).notNull(),
-  lastStatusChange: timestamp("last_status_change", { withTimezone: true }).defaultNow().notNull(),
-  createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
-});
-
-// ==============================================================================
-// 4. Nurse Profiles & Clinical Credentials
+// 2. Nurse Profiles & Clinical Credentials
 // ==============================================================================
 export const nurseProfiles = pgTable("nurse_profiles", {
   id: uuid("id").defaultRandom().primaryKey(),
-  profileId: uuid("profile_id").references(() => profiles.id).unique().notNull(),
+  profileId: uuid("profile_id").references(() => profiles.id, { onDelete: "cascade" }).unique().notNull(),
   stateCouncilReg: text("state_council_reg").notNull(), // e.g. "ONRC-2018-9941"
   hprId: text("hpr_id"), // "91-8821-4433-2011@hpr"
   designation: text("designation").default("Senior Staff Nurse & Triage Specialist").notNull(),
-  facilityId: uuid("facility_id").references(() => profiles.id), // references profiles table where role = 'facility'
+  facilityId: uuid("facility_id").references(() => profiles.id, { onDelete: "cascade" }), // references profiles table where role = 'facility'
   facilityName: text("facility_name").default("Community Health Centre (CHC) Khandapada"),
   shiftSchedule: text("shift_schedule").default("Morning Roster (08:00 AM - 04:00 PM)"),
   aadhaarEkycVerified: boolean("aadhaar_ekyc_verified").default(true).notNull(),
@@ -227,7 +175,7 @@ export const newPatient = pgTable("new_patient", {
 export const triageTickets = pgTable("triage_tickets", {
   id: uuid("id").defaultRandom().primaryKey(),
   caseNumber: text("case_number").unique().notNull(), // e.g. "#LS1024", "TR-9041"
-  patientId: uuid("patient_id").references(() => profiles.id),
+  patientId: uuid("patient_id").references(() => profiles.id, { onDelete: "cascade" }),
   newPatientId: uuid("new_patient_id").references(() => newPatient.id),
 
   // Family context
@@ -261,9 +209,9 @@ export const triageTickets = pgTable("triage_tickets", {
   priority: text("priority").default("Yellow").notNull(),
 
   // Facility Staff, Doctor & Nurse
-  facilityId: uuid("facility_id").references(() => profiles.id),
-  doctorId: uuid("doctor_id").references(() => profiles.id),
-  nurseId: uuid("nurse_id").references(() => profiles.id),
+  facilityId: uuid("facility_id").references(() => profiles.id, { onDelete: "set null" }),
+  doctorId: uuid("doctor_id").references(() => profiles.id, { onDelete: "set null" }),
+  nurseId: uuid("nurse_id").references(() => profiles.id, { onDelete: "set null" }),
 
   resolveNotes: text("resolve_notes"),
   submittedVia: text("submitted_via").default("Mobile App").notNull(),
@@ -275,110 +223,32 @@ export const triageTickets = pgTable("triage_tickets", {
   scheduleTime: timestamp("schedule_time", { withTimezone: true }),
   revertedQuestions: jsonb("reverted_questions").default([]).notNull(),
   referalFacility: text("referal_facility"),
-  referalFacilityId: uuid("referal_facility_id").references(() => profiles.id),
+  referalFacilityId: uuid("referal_facility_id").references(() => profiles.id, { onDelete: "set null" }),
   transferReason: text("transfer_reason"),
+  referredFromTicketId: uuid("referred_from_ticket_id"),
+  referredFromFacility: text("referred_from_facility"),
+
+  // Patient & Facility Referral Acceptance Workflow
+  patientReferralStatus: text("patient_referral_status").default("Pending"), // 'Pending', 'Accepted', 'Declined'
+  patientReferralAcceptedAt: timestamp("patient_referral_accepted_at", { withTimezone: true }),
+  facilityReferralStatus: text("facility_referral_status").default("Pending"), // 'Pending', 'Accepted', 'Declined'
+  facilityReferralAcceptedAt: timestamp("facility_referral_accepted_at", { withTimezone: true }),
+  referralNotes: text("referral_notes"),
 
   createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
   updatedAt: timestamp("updated_at", { withTimezone: true }).defaultNow().notNull(),
 });
 
 // ==============================================================================
-// 6. Nurse Review Actions Audit Trail
+// 4. Uploaded Reports (Patient Report Upload & Summary Check)
 // ==============================================================================
-export const nurseReviewActions = pgTable("nurse_review_actions", {
-  id: uuid("id").defaultRandom().primaryKey(),
-  ticketId: uuid("ticket_id").references(() => triageTickets.id).notNull(),
-  caseNumber: text("case_number").notNull(),
-  nurseId: uuid("nurse_id").references(() => profiles.id).notNull(),
-  nurseName: text("nurse_name").default("Nurse Priya S.").notNull(),
-  actionType: text("action_type").notNull(),
-  reviewNote: text("review_note").notNull(),
-  templateUsed: text("template_used"),
-  visibility: text("visibility").default("Medical Team (Assigned)").notNull(),
-  saveToHistory: boolean("save_to_history").default(true).notNull(),
-  notifyTeam: boolean("notify_team").default(true).notNull(),
-  referralDestination: text("referral_destination"),
-  assignedDoctorId: uuid("assigned_doctor_id").references(() => profiles.id),
-  assignedDoctorName: text("assigned_doctor_name"),
-  previousStatus: text("previous_status"),
-  resultingStatus: text("resulting_status").notNull(),
-  metadata: jsonb("metadata").default({}),
-  createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
-});
-
-// ==============================================================================
-// 7. Inter-Hospital Referrals (Medical / CHC Referral Network)
-// ==============================================================================
-export const hospitalReferrals = pgTable("hospital_referrals", {
-  id: uuid("id").defaultRandom().primaryKey(),
-  ticketId: uuid("ticket_id").references(() => triageTickets.id),
-  patientUhid: text("patient_uhid").notNull(),
-  patientName: text("patient_name").notNull(),
-  patientAge: integer("patient_age"),
-  patientGender: text("patient_gender"),
-  phone: text("phone"),
-  referringHospital: text("referring_hospital").notNull(),
-  referringDoctor: text("referring_doctor").notNull(),
-  targetFacilityId: uuid("target_facility_id").references(() => phcFacilities.id),
-  targetFacilityName: text("target_facility_name").default("CHC Khandapada").notNull(),
-  assignedDoctorId: uuid("assigned_doctor_id").references(() => profiles.id),
-  assignedDoctorName: text("assigned_doctor_name"),
-  triagePriority: text("triage_priority").default("Urgent").notNull(),
-  status: text("status").default("Pending Review").notNull(),
-  clinicalReason: text("clinical_reason").notNull(),
-  vitalsSummary: jsonb("vitals_summary").default({}),
-  assignmentNotes: text("assignment_notes"),
-  referredAt: timestamp("referred_at", { withTimezone: true }).defaultNow().notNull(),
-  createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
-  updatedAt: timestamp("updated_at", { withTimezone: true }).defaultNow().notNull(),
-});
-
-// ==============================================================================
-// 8. Medical Pharmacy Inventory & Jan Aushadhi Stock
-// ==============================================================================
-export const medicalInventory = pgTable("medical_inventory", {
-  id: uuid("id").defaultRandom().primaryKey(),
-  facilityId: uuid("facility_id").references(() => phcFacilities.id),
-  medicineName: text("medicine_name").notNull(),
-  medicineCode: text("medicine_code").notNull(),
-  category: text("category").notNull(),
-  stockLevel: integer("stock_level").default(0).notNull(),
-  minThreshold: integer("min_threshold").default(50).notNull(),
-  unit: text("unit").default("strips").notNull(),
-  batchNo: text("batch_no").default("BCH-2026-01").notNull(),
-  expiryDate: date("expiry_date").notNull(),
-  status: text("status").default("In Stock").notNull(),
-  metadata: jsonb("metadata").default({}),
-  createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
-  updatedAt: timestamp("updated_at", { withTimezone: true }).defaultNow().notNull(),
-});
-
-// ==============================================================================
-// 9. Medical Prescriptions & Dispensation Desk
-// ==============================================================================
-export const medicalPrescriptions = pgTable("medical_prescriptions", {
-  id: uuid("id").defaultRandom().primaryKey(),
-  ticketId: uuid("ticket_id").references(() => triageTickets.id),
-  patientId: uuid("patient_id").references(() => profiles.id),
-  patientUhid: text("patient_uhid").notNull(),
-  patientName: text("patient_name").notNull(),
-  doctorId: uuid("doctor_id").references(() => profiles.id),
-  doctorName: text("doctor_name").notNull(),
-  medications: jsonb("medications").default([]).notNull(),
-  dispensedById: uuid("dispensed_by_id").references(() => profiles.id),
-  dispensedByName: text("dispensed_by_name"),
-  status: text("status").default("Pending Dispensation").notNull(),
-  dispensedAt: timestamp("dispensed_at", { withTimezone: true }),
-  createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
-  updatedAt: timestamp("updated_at", { withTimezone: true }).defaultNow().notNull(),
-});
 
 // ==============================================================================
 // 10. Uploaded Reports (Patient Report Upload & Summary Check)
 // ==============================================================================
 export const uploadedReport = pgTable("uploaded_reports", {
   id: uuid("id").defaultRandom().primaryKey(),
-  patientId: uuid("patient_id").references(() => profiles.id).notNull(),
+  patientId: uuid("patient_id").references(() => profiles.id, { onDelete: "cascade" }).notNull(),
   reportType: text("report_type").notNull(),
   fileUrl: text("file_url").notNull(),
   fileType: text("file_type"),
@@ -391,7 +261,7 @@ export const uploadedReport = pgTable("uploaded_reports", {
 // ==============================================================================
 export const patientReminders = pgTable("patient_reminders", {
   id: uuid("id").defaultRandom().primaryKey(),
-  patientId: uuid("patient_id").references(() => profiles.id).notNull(),
+  patientId: uuid("patient_id").references(() => profiles.id, { onDelete: "cascade" }).notNull(),
   ticketId: uuid("ticket_id").references(() => triageTickets.id),
   type: text("type").default("medication").notNull(),
   title: text("title").notNull(),
@@ -409,7 +279,7 @@ export const patientReminders = pgTable("patient_reminders", {
 
 export const patientVitalsLogs = pgTable("patient_vitals_logs", {
   id: uuid("id").defaultRandom().primaryKey(),
-  patientId: uuid("patient_id").references(() => profiles.id).notNull(),
+  patientId: uuid("patient_id").references(() => profiles.id, { onDelete: "cascade" }).notNull(),
   ticketId: uuid("ticket_id").references(() => triageTickets.id),
   systolic: integer("systolic"),
   diastolic: integer("diastolic"),
@@ -426,7 +296,7 @@ export const patientVitalsLogs = pgTable("patient_vitals_logs", {
 // ==============================================================================
 export const organizationProfiles = pgTable("organization_profiles", {
   id: uuid("id").defaultRandom().primaryKey(),
-  profileId: uuid("profile_id").references(() => profiles.id).unique(),
+  profileId: uuid("profile_id").references(() => profiles.id, { onDelete: "cascade" }).unique(),
   orgCode: text("org_code").unique().notNull(),
   name: text("name").notNull(),
   category: text("category").notNull(),
@@ -453,60 +323,6 @@ export const organizationScreenings = pgTable("organization_screenings", {
   riskTier: text("risk_tier").default("Low Risk").notNull(),
   recommendations: text("recommendations"),
   screenedAt: timestamp("screened_at", { withTimezone: true }).defaultNow().notNull(),
-});
-
-// ==============================================================================
-// 13. Health Camp Outreach & Mobile Medical Unit (MMU) Sessions
-// ==============================================================================
-export const healthcampSessions = pgTable("healthcamp_sessions", {
-  id: uuid("id").defaultRandom().primaryKey(),
-  campName: text("camp_name").notNull(),
-  mmuCode: text("mmu_code").default("MMU-OD-04").notNull(),
-  district: text("district").default("Nayagarh").notNull(),
-  location: text("location").notNull(),
-  campDate: date("camp_date").defaultNow().notNull(),
-  campLead: text("camp_lead").notNull(),
-  targetScreenings: integer("target_screenings").default(200).notNull(),
-  completedScreenings: integer("completed_screenings").default(0).notNull(),
-  status: text("status").default("Active").notNull(),
-  metadata: jsonb("metadata").default({}),
-  createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
-});
-
-export const campAttendees = pgTable("camp_attendees", {
-  id: uuid("id").defaultRandom().primaryKey(),
-  campId: uuid("camp_id").references(() => healthcampSessions.id).notNull(),
-  tokenNumber: text("token_number").notNull(),
-  patientName: text("patient_name").notNull(),
-  age: integer("age").notNull(),
-  gender: text("gender").notNull(),
-  phone: text("phone"),
-  bp: text("bp"),
-  pulse: integer("pulse"),
-  spo2: integer("spo2"),
-  temp: text("temp"),
-  complaint: text("complaint").notNull(),
-  urgency: text("urgency").default("Routine").notNull(),
-  status: text("status").default("Screened").notNull(),
-  registeredTime: timestamp("registered_time", { withTimezone: true }).defaultNow().notNull(),
-});
-
-// ==============================================================================
-// 14. Audit & Compliance Logs
-// ==============================================================================
-export const auditLogs = pgTable("audit_logs", {
-  id: uuid("id").defaultRandom().primaryKey(),
-  ticketId: uuid("ticket_id").references(() => triageTickets.id),
-  caseNumber: text("case_number"),
-  performedBy: uuid("performed_by").references(() => profiles.id),
-  performedByName: text("performed_by_name"),
-  role: text("role"),
-  action: text("action").notNull(),
-  previousUrgency: text("previous_urgency"),
-  finalUrgency: text("final_urgency"),
-  reason: text("reason"),
-  metadata: jsonb("metadata").default({}),
-  createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
 });
 
 // ==============================================================================

@@ -248,10 +248,6 @@ export function DoctorEmergencyCasesView({
       {/* Emergency Command Header */}
       <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-4">
         <div>
-          <div className="inline-flex items-center gap-2 px-3 py-1 rounded-full text-xs font-bold bg-rose-100/90 text-rose-900 border border-rose-300/80 mb-2 shadow-2xs">
-            <span className="w-2.5 h-2.5 rounded-full bg-rose-600 animate-pulse" />
-            <span>CRITICAL RED-LEVEL ESCALATIONS &bull; Zero Wait Time Protocol</span>
-          </div>
           <h1 className="text-2xl sm:text-3xl font-black text-slate-900 tracking-tight flex items-center gap-2.5">
             <AlertTriangle className="w-7 h-7 text-rose-600" />
             <span>Emergency Cases &bull; Critical Triage Command</span>

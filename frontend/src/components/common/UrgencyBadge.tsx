@@ -27,7 +27,21 @@ export function UrgencyBadge({ urgency, className = "", size = "md" }: UrgencyBa
     bg = "bg-rose-50 text-rose-800 border-rose-200";
     dot = "bg-rose-600 animate-ping";
     label = "Immediate";
-  } else if (norm.includes("less urgent") || norm.includes("green") || norm.includes("low")) {
+  } else if (
+    norm.includes("yellow") ||
+    (norm.includes("urgent") && !norm.includes("less urgent")) ||
+    norm.includes("priority 2") ||
+    norm.includes("priority 3") ||
+    norm.includes("moderate")
+  ) {
+    bg = "bg-amber-50 text-amber-800 border-amber-200";
+    dot = "bg-amber-500 animate-pulse";
+    label = "Urgent";
+  } else if (
+    norm.includes("less urgent") ||
+    norm.includes("green") ||
+    norm.split(/\s+/).includes("low")
+  ) {
     bg = "bg-emerald-50 text-emerald-800 border-emerald-200";
     dot = "bg-emerald-500";
     label = "Less Urgent";
@@ -35,10 +49,6 @@ export function UrgencyBadge({ urgency, className = "", size = "md" }: UrgencyBa
     bg = "bg-emerald-50 text-emerald-800 border-emerald-200";
     dot = "bg-emerald-500";
     label = "Routine";
-  } else if (norm.includes("urgent") || norm.includes("yellow") || norm.includes("priority") || norm.includes("moderate")) {
-    bg = "bg-amber-50 text-amber-800 border-amber-200";
-    dot = "bg-amber-500 animate-pulse";
-    label = "Urgent";
   }
 
   const sizeClasses = {

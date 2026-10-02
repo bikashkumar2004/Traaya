@@ -10,7 +10,6 @@ import {
   Users,
   Package,
   FileText,
-  FlaskConical,
   Building2,
   Activity,
   Menu,
@@ -44,9 +43,7 @@ export type MedicalNavTab =
   | "patients"
   | "referrals"
   | "facility"
-  | "inventory"
-  | "prescriptions"
-  | "diagnostics";
+  | "inventory";
 
 export type MedicalPatientStatus =
   | "Under Review"
@@ -86,6 +83,20 @@ export interface HospitalReferral {
   assignedDepartment?: string;
   assignedBay?: string;
   assignedTimeline?: string;
+  oldFacilityId?: string;
+  referalFacilityId?: string;
+  scheduleTime?: string;
+  patientReferralStatus?: string;
+}
+
+function toDateTimeLocalString(date: Date): string {
+  const pad = (n: number) => String(n).padStart(2, "0");
+  const y = date.getFullYear();
+  const m = pad(date.getMonth() + 1);
+  const d = pad(date.getDate());
+  const h = pad(date.getHours());
+  const min = pad(date.getMinutes());
+  return `${y}-${m}-${d}T${h}:${min}`;
 }
 
 export interface FacilityDoctorStaff {
@@ -114,40 +125,8 @@ interface InventoryItem {
   status: "Adequate" | "Low Stock" | "Critical";
 }
 
-interface PrescriptionOrder {
-  id: string;
-  orderNumber: string;
-  patientName: string;
-  uhid: string;
-  doctorName: string;
-  department: string;
-  prescribedAt: string;
-  urgency: "Immediate" | "Urgent" | "Routine";
-  status: "Pending Dispensing" | "Dispensed";
-  medicines: {
-    name: string;
-    dosage: string;
-    frequency: string;
-    duration: string;
-  }[];
-}
-
-interface LabReportOrder {
-  id: string;
-  testCode: string;
-  testName: string;
-  patientName: string;
-  uhid: string;
-  sampleCollected: string;
-  status: "Processing" | "Verified";
-  resultSummary: string;
-  urgency: "Stat" | "Routine";
-}
-
 const INITIAL_PATIENTS: BasicMedicalPatient[] = [];
 const INITIAL_INVENTORY: InventoryItem[] = [];
-const INITIAL_PRESCRIPTIONS: PrescriptionOrder[] = [];
-const INITIAL_LAB_REPORTS: LabReportOrder[] = [];
 const INITIAL_REFERRALS: HospitalReferral[] = [];
 const FACILITY_DOCTORS: FacilityDoctorStaff[] = [];
 
@@ -164,24 +143,7 @@ function mapToStandardStatus(status?: string): MedicalPatientStatus {
 }
 
 function getStoredPatients(): BasicMedicalPatient[] {
-  if (typeof window === "undefined") return INITIAL_PATIENTS;
-  try {
-    const raw = localStorage.getItem(STORAGE_KEY);
-    if (!raw) {
-      localStorage.setItem(STORAGE_KEY, JSON.stringify(INITIAL_PATIENTS));
-      return INITIAL_PATIENTS;
-    }
-    const parsed = JSON.parse(raw);
-    if (Array.isArray(parsed) && parsed.length > 0) {
-      return parsed.map((p: any) => ({
-        ...p,
-        status: mapToStandardStatus(p.status),
-      }));
-    }
-    return INITIAL_PATIENTS;
-  } catch {
-    return INITIAL_PATIENTS;
-  }
+  return INITIAL_PATIENTS;
 }
 
 function saveStoredPatients(data: BasicMedicalPatient[]) {
@@ -197,12 +159,9 @@ function getStoredReferrals(): HospitalReferral[] {
   if (typeof window === "undefined") return INITIAL_REFERRALS;
   try {
     const raw = localStorage.getItem(REFERRALS_STORAGE_KEY);
-    if (!raw) {
-      localStorage.setItem(REFERRALS_STORAGE_KEY, JSON.stringify(INITIAL_REFERRALS));
-      return INITIAL_REFERRALS;
-    }
+    if (!raw) return INITIAL_REFERRALS;
     const parsed = JSON.parse(raw);
-    return Array.isArray(parsed) && parsed.length > 0 ? parsed : INITIAL_REFERRALS;
+    return Array.isArray(parsed) ? parsed : INITIAL_REFERRALS;
   } catch {
     return INITIAL_REFERRALS;
   }
@@ -253,8 +212,6 @@ export default function MedicalPortalPage() {
     emergencyBays: { total: 6, occupied: 4 },
   });
   const [inventory, setInventory] = useState<InventoryItem[]>(INITIAL_INVENTORY);
-  const [prescriptions, setPrescriptions] = useState<PrescriptionOrder[]>(INITIAL_PRESCRIPTIONS);
-  const [labReports, setLabReports] = useState<LabReportOrder[]>(INITIAL_LAB_REPORTS);
   
   // Patient & Referral Filters
   const [patientPriorityFilter, setPatientPriorityFilter] = useState("All");
@@ -270,11 +227,12 @@ export default function MedicalPortalPage() {
   const [toastMessage, setToastMessage] = useState<string | null>(null);
 
   // Assign Doctor Form States
-  const [assignDoctorId, setAssignDoctorId] = useState<string>("DOC-01");
-  const [assignDepartment, setAssignDepartment] = useState<string>("Department of Medicine");
-  const [assignBay, setAssignBay] = useState<string>("Emergency Bay 1 (Cardiac Telemetry)");
-  const [assignTimeline, setAssignTimeline] = useState<string>("STAT Immediate (< 15 mins)");
-  const [assignNotes, setAssignNotes] = useState<string>("");
+  const [assignDoctorId, setAssignDoctorId] = useState<string>("");
+  const [assignTimeInput, setAssignTimeInput] = useState<string>(() => {
+    const now = new Date();
+    now.setMinutes(now.getMinutes() + 30);
+    return toDateTimeLocalString(now);
+  });
 
   // New Patient Form
   const [newName, setNewName] = useState("");
@@ -285,123 +243,340 @@ export default function MedicalPortalPage() {
   const [newUhid, setNewUhid] = useState(`UHID-${Math.floor(10000 + Math.random() * 90000)}`);
   const [newPriority, setNewPriority] = useState<BasicMedicalPatient["triagePriority"]>("Routine / Fit");
 
+  // Load real data from live database tables
+  const loadRealData = async () => {
+    if (!isSupabaseConfigured || !supabase) return;
+
+    try {
+      // 1. Resolve facility context
+      let targetFacId = user?.facilityId || user?.id;
+      if (!targetFacId && typeof window !== "undefined") {
+        try {
+          const stored = localStorage.getItem("triageassist_user");
+          if (stored) {
+            const parsed = JSON.parse(stored);
+            targetFacId = parsed?.facilityId || parsed?.id;
+          }
+        } catch {}
+      }
+
+      // 2. Fetch real triage tickets where facility_id is assigned to this facility in triage tickets dataset
+      let tickets: any[] = [];
+      if (targetFacId && /^[0-9a-fA-F-]{36}$/.test(targetFacId)) {
+        const { data: facTickets, error: ticketErr } = await supabase
+          .from("triage_tickets")
+          .select(`
+            *,
+            profiles:patient_id(id, full_name, user_id, age, gender, phone),
+            new_patient:new_patient_id(id, full_name, uhid, age, gender, phone),
+            facility_profile:facility_id(id, full_name, district, state)
+          `)
+          .eq("facility_id", targetFacId)
+          .order("created_at", { ascending: false });
+
+        if (!ticketErr && facTickets) {
+          tickets = facTickets;
+        }
+      } else {
+        const { data: allTickets, error: allErr } = await supabase
+          .from("triage_tickets")
+          .select(`
+            *,
+            profiles:patient_id(id, full_name, user_id, age, gender, phone),
+            new_patient:new_patient_id(id, full_name, uhid, age, gender, phone),
+            facility_profile:facility_id(id, full_name, district, state)
+          `)
+          .order("created_at", { ascending: false });
+
+        if (!allErr && allTickets) {
+          tickets = allTickets;
+        }
+      }
+
+      if (tickets && tickets.length > 0) {
+        const mappedPatients: BasicMedicalPatient[] = tickets.map((t: any) => {
+          const isFamily = Boolean(t.is_family_member);
+          const profile = (Array.isArray(t.profiles) ? t.profiles[0] : t.profiles) || {};
+          const newPat = (Array.isArray(t.new_patient) ? t.new_patient[0] : t.new_patient) || {};
+          const facProf = (Array.isArray(t.facility_profile) ? t.facility_profile[0] : t.facility_profile) || {};
+          const snapshot = t.symptoms_data?.patient_intake_snapshot || {};
+
+          let dischargeDetails: any = null;
+          try {
+            if (typeof t.discharge_report_text === "string" && t.discharge_report_text.trim().startsWith("{")) {
+              const parsed = JSON.parse(t.discharge_report_text);
+              dischargeDetails = parsed?.patientDetails || null;
+            }
+          } catch {}
+
+          const name = isFamily
+            ? (t.family_member_name || "Family Dependent")
+            : (newPat.full_name || profile.full_name || dischargeDetails?.name || snapshot.name || "Registered Patient");
+
+          const uhid = isFamily
+            ? (t.family_member_uhid || t.case_number || "UHID-FAM")
+            : (newPat.uhid || profile.user_id || dischargeDetails?.patientId || snapshot.uhid || t.case_number || `UHID-${String(t.id).slice(0, 5)}`);
+
+          let extractedAge = Number(isFamily ? t.family_member_age : (newPat.age ?? profile.age ?? snapshot.age)) || 0;
+          if (!extractedAge && dischargeDetails?.ageSex) {
+            const ageMatch = String(dischargeDetails.ageSex).match(/\d+/);
+            if (ageMatch) extractedAge = parseInt(ageMatch[0], 10);
+          }
+          const age = extractedAge || 26;
+
+          let rawGender = isFamily
+            ? (t.family_member_gender || "Other")
+            : (newPat.gender || profile.gender || snapshot.gender || "");
+          if (!rawGender && dischargeDetails?.ageSex) {
+            if (/male/i.test(dischargeDetails.ageSex)) rawGender = "Male";
+            else if (/female/i.test(dischargeDetails.ageSex)) rawGender = "Female";
+          }
+          const gender = rawGender ? (rawGender.charAt(0).toUpperCase() + rawGender.slice(1).toLowerCase()) : "Male";
+
+          const phone = isFamily
+            ? (t.family_member_phone || "")
+            : (newPat.phone || profile.phone || snapshot.phone || "+91 8895140540");
+
+          const rawPrio = (t.priority || t.urgency || t.priority_level || "").toLowerCase();
+          let triagePriority: BasicMedicalPatient["triagePriority"] = "Routine / Fit";
+          if (rawPrio.includes("red") || rawPrio.includes("immediate")) {
+            triagePriority = "Immediate";
+          } else if (rawPrio.includes("yellow") || rawPrio.includes("urgent")) {
+            triagePriority = "Urgent";
+          } else if (rawPrio.includes("less")) {
+            triagePriority = "Less Urgent";
+          } else {
+            triagePriority = "Routine / Fit";
+          }
+
+          return {
+            id: t.id,
+            patientUhid: uhid,
+            name: name,
+            age: age,
+            gender: gender,
+            phone: phone,
+            triagePriority: triagePriority,
+            status: mapToStandardStatus(t.status),
+            admissionDate: new Date(t.created_at || Date.now()).toLocaleDateString("en-GB", {
+              day: "2-digit",
+              month: "short",
+              year: "numeric",
+            }),
+            unitOrWard: facProf.full_name || "OPD Triage Desk",
+          };
+        });
+
+        setPatients(mappedPatients);
+        saveStoredPatients(mappedPatients);
+      } else {
+        setPatients([]);
+        saveStoredPatients([]);
+      }
+
+      // 3. Inbound Referrals - query triage tickets with patient and facility joins
+      // Show ONLY to that facility profile which facility id is present in referal_facility_id
+      // AND patient_referral_status MUST be 'Accepted'
+      let refTickets: any[] = [];
+      if (targetFacId && /^[0-9a-fA-F-]{36}$/.test(targetFacId)) {
+        const { data: inboundData, error: refErr } = await supabase
+          .from("triage_tickets")
+          .select(`
+            *,
+            profiles:patient_id(id, full_name, user_id, age, gender, phone),
+            new_patient:new_patient_id(id, full_name, uhid, age, gender, phone),
+            referring_facility:facility_id(id, full_name, district, state)
+          `)
+          .in("status", ["Referred", "Scheduled", "Under Review"])
+          .eq("referal_facility_id", targetFacId)
+          .eq("patient_referral_status", "Accepted")
+          .order("created_at", { ascending: false });
+
+        if (!refErr && inboundData) {
+          refTickets = inboundData;
+        }
+      }
+
+      if (refTickets.length > 0) {
+        const mappedRefs: HospitalReferral[] = refTickets.map((r: any) => {
+          const isFamily = Boolean(r.is_family_member);
+          const profile = (Array.isArray(r.profiles) ? r.profiles[0] : r.profiles) || {};
+          const newPat = (Array.isArray(r.new_patient) ? r.new_patient[0] : r.new_patient) || {};
+          const refFac = (Array.isArray(r.referring_facility) ? r.referring_facility[0] : r.referring_facility) || {};
+          const snapshot = r.symptoms_data?.patient_intake_snapshot || {};
+
+          const patName = isFamily
+            ? (r.family_member_name || "Family Dependent")
+            : (newPat.full_name || profile.full_name || snapshot.name || "Patient");
+
+          const uhid = isFamily
+            ? (r.family_member_uhid || r.case_number || "UHID-FAM")
+            : (newPat.uhid || profile.user_id || snapshot.uhid || r.case_number || "UHID-GEN");
+
+          const age = Number(isFamily ? r.family_member_age : (newPat.age ?? profile.age ?? snapshot.age)) || 26;
+          const rawGender = isFamily
+            ? (r.family_member_gender || "Other")
+            : (newPat.gender || profile.gender || snapshot.gender || "Other");
+          const gender = rawGender ? (rawGender.charAt(0).toUpperCase() + rawGender.slice(1).toLowerCase()) : "Other";
+
+          const phone = isFamily
+            ? (r.family_member_phone || "")
+            : (newPat.phone || profile.phone || snapshot.phone || "");
+
+          const rawPrio = (r.priority || r.urgency || "").toLowerCase();
+          let priority: HospitalReferral["priority"] = "Routine";
+          if (rawPrio.includes("red") || rawPrio.includes("immediate")) priority = "Immediate";
+          else if (rawPrio.includes("yellow") || rawPrio.includes("urgent")) priority = "Urgent";
+          else if (rawPrio.includes("less")) priority = "Less Urgent";
+
+          const referringFacilityName =
+            r.referred_from_facility ||
+            refFac.full_name ||
+            "Referring Health Facility";
+
+          return {
+            id: r.id,
+            uhid: uhid,
+            patientName: patName,
+            age: age,
+            gender: gender,
+            phone: phone,
+            referringDoctor: r.assigned_doctor_name || "Attending Medical Officer",
+            referringHospital: referringFacilityName,
+            referredAt: new Date(r.patient_referral_accepted_at || r.updated_at || r.created_at || Date.now()).toLocaleDateString("en-GB", {
+              day: "2-digit",
+              month: "short",
+              year: "numeric",
+            }),
+            priority: priority,
+            chiefComplaint: r.symptoms_data?.chief_complaint || r.transfer_reason || "Secondary / Tertiary Medical Evaluation",
+            clinicalNotes: r.transfer_reason || r.referral_notes || "",
+            status: r.facility_referral_status === "Accepted" ? "Assigned" : "Pending Assignment",
+            assignedDoctor: r.facility_referral_status === "Accepted" ? (r.assigned_doctor_name || "Assigned Doctor") : undefined,
+            scheduleTime: r.schedule_time || undefined,
+            assignedTimeline: r.schedule_time
+              ? new Date(r.schedule_time).toLocaleString([], { dateStyle: "short", timeStyle: "short" })
+              : undefined,
+            patientReferralStatus: r.patient_referral_status,
+            oldFacilityId: r.referred_from_ticket_id || r.referred_from_facility_id || r.facility_id,
+            referalFacilityId: r.referal_facility_id,
+          };
+        });
+        setReferrals(mappedRefs);
+        saveStoredReferrals(mappedRefs);
+      } else {
+        setReferrals([]);
+        saveStoredReferrals([]);
+      }
+
+      // 4. Facility Doctors from real doctor_profiles & profiles
+      let docQuery = supabase
+        .from("doctor_profiles")
+        .select(`
+          id,
+          profile_id,
+          facility_id,
+          facility_name,
+          designation,
+          room_number,
+          department,
+          qualification,
+          availability_status,
+          profiles:profile_id(id, full_name, user_id, phone)
+        `);
+
+      if (targetFacId && /^[0-9a-fA-F-]{36}$/.test(targetFacId)) {
+        docQuery = docQuery.eq("facility_id", targetFacId);
+      }
+
+      let { data: realDocs, error: docErr } = await docQuery;
+      if (!docErr && (!realDocs || realDocs.length === 0)) {
+        const { data: allDocs } = await supabase
+          .from("doctor_profiles")
+          .select(`
+            id,
+            profile_id,
+            facility_id,
+            facility_name,
+            designation,
+            room_number,
+            department,
+            qualification,
+            availability_status,
+            profiles:profile_id(id, full_name, user_id, phone)
+          `);
+        if (allDocs && allDocs.length > 0) {
+          realDocs = allDocs;
+        }
+      }
+      if (!docErr && realDocs && realDocs.length > 0) {
+        const mappedDocs: FacilityDoctorStaff[] = realDocs.map((dp: any, idx: number) => {
+          const prof = dp.profiles || {};
+          return {
+            id: dp.profile_id || dp.id,
+            name: prof.full_name || "Doctor",
+            specialty: dp.qualification || dp.designation || "General Medicine & Emergency OPD",
+            department: dp.department || "Department of Medicine",
+            room: dp.room_number || `OPD Room ${101 + idx}`,
+            shift: "Morning Roster (08:00 AM - 02:00 PM)",
+            status: (dp.availability_status as any) || "Available",
+            activeCases: 0,
+            phone: prof.phone || "+91 94370 00000",
+          };
+        });
+        setStaffDoctors(mappedDocs);
+      } else {
+        const { data: pDocs } = await supabase.from("profiles").select("*").eq("role", "doctor");
+        if (pDocs && pDocs.length > 0) {
+          const mappedDocs: FacilityDoctorStaff[] = pDocs.map((doc: any, idx: number) => ({
+            id: doc.id,
+            name: doc.full_name || "Doctor",
+            specialty: "General Medicine",
+            department: "Department of Medicine",
+            room: `OPD Room ${101 + idx}`,
+            shift: "Morning Roster (08:00 AM - 02:00 PM)",
+            status: "Available",
+            activeCases: 0,
+            phone: doc.phone || "+91 94370 00000",
+          }));
+          setStaffDoctors(mappedDocs);
+        }
+      }
+    } catch (err) {
+      console.error("[Medical] Error loading real data from database:", err);
+    }
+  };
+
   useEffect(() => {
+    // Initial stored state (with legacy corrupted rows filtered)
     setPatients(getStoredPatients());
     setReferrals(getStoredReferrals());
 
+    // Fetch real data from live database tables
+    loadRealData();
+
+    // Subscribe to live database updates on triage_tickets
     if (isSupabaseConfigured && supabase) {
-      // Inbound Referrals
-      supabase
-        .from('hospital_referrals')
-        .select('*')
-        .order('created_at', { ascending: false })
-        .then(({ data, error }) => {
-          if (!error && data && data.length > 0) {
-            const mapped: HospitalReferral[] = data.map((r: any) => ({
-              id: r.id,
-              uhid: r.uhid || 'UHID-GEN',
-              patientName: r.patient_name || 'Patient',
-              age: r.age || 0,
-              gender: r.gender || 'Other',
-              phone: r.phone || '',
-              referringDoctor: r.referring_doctor || 'Referring MD',
-              referringHospital: r.referring_facility || 'PHC Clinic',
-              referredAt: new Date(r.created_at || Date.now()).toLocaleDateString(),
-              priority: (r.priority || 'Routine') as any,
-              chiefComplaint: r.chief_complaint || 'Medical evaluation',
-              clinicalNotes: r.clinical_notes || '',
-              status: (r.status || 'Pending Assignment') as any,
-              assignedDoctor: r.assigned_doctor_name,
-              assignedDepartment: r.assigned_department,
-              assignedBay: r.assigned_bay,
-              assignedTimeline: r.assigned_timeline,
-            }));
-            setReferrals(mapped);
+      const channel = supabase
+        .channel("facility-medical-live-sync")
+        .on(
+          "postgres_changes",
+          { event: "*", schema: "public", table: "triage_tickets" },
+          () => {
+            loadRealData();
           }
-        });
+        )
+        .subscribe();
 
-      // Medical Inventory
-      supabase
-        .from('medical_inventory')
-        .select('*')
-        .order('medicine_name', { ascending: true })
-        .then(({ data, error }) => {
-          if (!error && data && data.length > 0) {
-            const mappedInv: InventoryItem[] = data.map((item: any) => ({
-              id: item.id,
-              drugCode: item.medicine_code || 'MED-01',
-              genericName: item.medicine_name || 'Medicine',
-              brandName: item.medicine_name || 'Generic',
-              category: (item.category || 'Analgesic') as any,
-              currentStock: item.stock_level ?? 0,
-              threshold: item.min_threshold ?? 50,
-              unit: item.unit || 'strips',
-              batchNumber: item.batch_no || 'BCH-2026',
-              expiryDate: item.expiry_date || '2026-12-31',
-              status: (item.status === 'Low Stock' || item.status === 'Critical' ? item.status : 'Adequate') as any,
-            }));
-            setInventory(mappedInv);
-          }
-        });
-
-      // Facility Doctors from real profiles
-      supabase
-        .from('profiles')
-        .select('*')
-        .eq('role', 'doctor')
-        .then(({ data, error }) => {
-          if (!error && data && data.length > 0) {
-            const mappedDocs: FacilityDoctorStaff[] = data.map((doc: any, idx: number) => ({
-              id: doc.id,
-              name: doc.full_name || 'Doctor',
-              specialty: doc.specialization || 'General Medicine',
-              department: doc.department || 'Department of Medicine',
-              room: 'OPD Room ' + (101 + idx),
-              shift: 'Morning Roster (08:00 AM - 02:00 PM)',
-              status: 'Available',
-              activeCases: 0,
-              phone: doc.phone_number || '+91 94370 00000',
-            }));
-            setStaffDoctors(mappedDocs);
-          }
-        });
-
-      // Triage Tickets for Patient Queue
-      supabase
-        .from('triage_tickets')
-        .select('*')
-        .order('created_at', { ascending: false })
-        .limit(30)
-        .then(({ data, error }) => {
-          if (!error && data && data.length > 0) {
-            const mappedPatients: BasicMedicalPatient[] = data.map((t: any) => ({
-              id: t.id,
-              patientUhid: t.ticket_number || ('UHID-' + t.id.slice(0, 5)),
-              name: t.patient_name || 'Patient',
-              age: t.patient_age || 0,
-              gender: t.patient_gender || 'Other',
-              phone: t.patient_phone || '',
-              triagePriority: (t.priority_level || 'Routine / Fit') as any,
-              status: mapToStandardStatus(t.status),
-              admissionDate: new Date(t.created_at || Date.now()).toLocaleDateString(),
-              unitOrWard: 'OPD Triage Desk',
-            }));
-            setPatients(mappedPatients);
-          }
-        });
+      return () => {
+        supabase?.removeChannel(channel);
+      };
     }
-  }, []);
+  }, [user?.id, user?.facilityId]);
 
   const triggerToast = (msg: string) => {
     setToastMessage(msg);
     setTimeout(() => setToastMessage(null), 3500);
-  };
-
-  const handleDispense = (id: string) => {
-    setPrescriptions((prev) =>
-      prev.map((p) => (p.id === id ? { ...p, status: "Dispensed" } : p))
-    );
-    triggerToast("Prescription marked as dispensed & logged.");
   };
 
   const handleRestock = (id: string) => {
@@ -415,14 +590,7 @@ export default function MedicalPortalPage() {
     triggerToast("Inventory restocked (+500 units) from Jan Aushadhi depot.");
   };
 
-  const handleVerifyLab = (id: string) => {
-    setLabReports((prev) =>
-      prev.map((r) => (r.id === id ? { ...r, status: "Verified" } : r))
-    );
-    triggerToast("Diagnostic result verified.");
-  };
-
-  const handleAddPatientSubmit = (e: React.FormEvent) => {
+  const handleAddPatientSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!newName.trim() || !newUhid.trim()) return;
 
@@ -444,12 +612,49 @@ export default function MedicalPortalPage() {
     saveStoredPatients(updated);
     setShowAddModal(false);
 
+    // Persist to live Supabase / PostgreSQL database
+    if (isSupabaseConfigured && supabase) {
+      try {
+        const { data: newPatRow } = await supabase
+          .from("new_patient")
+          .insert({
+            uhid: patient.patientUhid,
+            full_name: patient.name,
+            age: patient.age,
+            gender: patient.gender.toLowerCase(),
+            phone: patient.phone,
+            location: "Facility Registered",
+            preferred_language: "Odia",
+            consent_status: "Given",
+            intake_notes: "Registered directly via Facility Patients Directory",
+          })
+          .select("id")
+          .maybeSingle();
+
+        if (newPatRow?.id) {
+          await supabase.from("triage_tickets").insert({
+            case_number: `TR-${Math.random().toString(36).substring(2, 6).toUpperCase()}`,
+            new_patient_id: newPatRow.id,
+            facility_id: user?.facilityId || user?.id || null,
+            status: patient.status,
+            priority: patient.triagePriority === "Immediate" ? "Red" : patient.triagePriority === "Urgent" ? "Yellow" : "Green",
+            created_at: new Date().toISOString(),
+            updated_at: new Date().toISOString(),
+          });
+          // Refresh live queue from database
+          await loadRealData();
+        }
+      } catch (err) {
+        console.warn("[Medical] Notice persisting new registered patient to DB:", err);
+      }
+    }
+
     setNewName("");
     setNewAge("");
     setNewPhone("");
     setNewStatus("Under Review");
     setNewUhid(`UHID-${Math.floor(10000 + Math.random() * 90000)}`);
-    triggerToast(`Patient ${patient.name} added to facility records.`);
+    triggerToast(`Patient ${patient.name} registered and saved to database.`);
   };
 
   const handleExportCensus = () => {
@@ -475,72 +680,77 @@ export default function MedicalPortalPage() {
   };
 
   // Confirm Referral Assignment to Doctor
-  const handleConfirmAssignment = (e: React.FormEvent) => {
+  const handleConfirmAssignment = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!selectedReferralToAssign) return;
 
-    const chosenDoctor = staffDoctors.find((d) => d.id === assignDoctorId) || staffDoctors[0];
+    const chosenDoctor = staffDoctors.find((d) => d.id === assignDoctorId) || staffDoctors[0] || {
+      id: assignDoctorId,
+      name: "Attending Specialist",
+    };
 
-    const updatedReferrals = referrals.map((ref) => {
-      if (ref.id === selectedReferralToAssign.id) {
-        return {
-          ...ref,
-          status: "Assigned" as const,
-          assignedDoctor: chosenDoctor.name,
-          assignedDepartment: assignDepartment,
-          assignedBay: assignBay,
-          assignedTimeline: assignTimeline,
-          clinicalNotes: assignNotes ? `${ref.clinicalNotes}\n[Facility Directives]: ${assignNotes}` : ref.clinicalNotes,
-        };
-      }
-      return ref;
-    });
+    let scheduledIso: string = new Date().toISOString();
+    if (assignTimeInput) {
+      try {
+        scheduledIso = new Date(assignTimeInput).toISOString();
+      } catch {}
+    }
 
-    setReferrals(updatedReferrals);
-    saveStoredReferrals(updatedReferrals);
+    const newFacilityId = selectedReferralToAssign.referalFacilityId || user?.facilityId || user?.id || null;
+    const oldFacilityId = selectedReferralToAssign.oldFacilityId || null;
+    const oldFacilityName = selectedReferralToAssign.referringHospital || null;
 
-    // Sync or enroll in Facility Patients Directory
-    setPatients((prev) => {
-      const existing = prev.find((p) => p.patientUhid === selectedReferralToAssign.uhid);
-      if (existing) {
-        const up = prev.map((p) =>
-          p.patientUhid === selectedReferralToAssign.uhid
-            ? {
-                ...p,
-                status: "Scheduled" as const,
-                unitOrWard: `${chosenDoctor.name} • ${assignBay}`,
-              }
-            : p
-        );
-        saveStoredPatients(up);
-        return up;
-      } else {
-        const newPatient: BasicMedicalPatient = {
-          id: `MED-${selectedReferralToAssign.id}`,
-          patientUhid: selectedReferralToAssign.uhid,
-          name: selectedReferralToAssign.patientName,
-          age: selectedReferralToAssign.age,
-          gender: selectedReferralToAssign.gender,
-          phone: selectedReferralToAssign.phone,
-          triagePriority: selectedReferralToAssign.priority === "Routine" ? "Routine / Fit" : selectedReferralToAssign.priority,
+    // Update live triage_tickets table in database
+    if (supabase) {
+      const { error } = await supabase
+        .from("triage_tickets")
+        .update({
+          facility_id: newFacilityId,
+          doctor_id: chosenDoctor.id,
+          assigned_doctor_name: chosenDoctor.name,
+          referred_from_ticket_id: oldFacilityId,
+          referred_from_facility_id: oldFacilityId,
+          referred_from_facility: oldFacilityName,
+          schedule_time: scheduledIso,
+          facility_referral_status: "Accepted",
+          facility_referral_accepted_at: new Date().toISOString(),
           status: "Scheduled",
-          admissionDate: "Today, Referred in",
-          unitOrWard: `${chosenDoctor.name} • ${assignBay}`,
-        };
-        const up = [newPatient, ...prev];
-        saveStoredPatients(up);
-        return up;
-      }
-    });
+          updated_at: new Date().toISOString(),
+        })
+        .eq("id", selectedReferralToAssign.id);
 
-    // Increment doctor active cases
+      if (error) {
+        console.error("[Medical] Error updating referral assignment:", error);
+      } else if (chosenDoctor.id) {
+        // Increment doctor active cases in database
+        try {
+          const { data: dp } = await supabase
+            .from("doctor_profiles")
+            .select("id, active_cases_count")
+            .eq("profile_id", chosenDoctor.id)
+            .maybeSingle();
+          if (dp) {
+            await supabase
+              .from("doctor_profiles")
+              .update({ active_cases_count: (dp.active_cases_count || 0) + 1 })
+              .eq("id", dp.id);
+          }
+        } catch (cntErr) {
+          console.warn("[Medical] Notice updating doctor active cases:", cntErr);
+        }
+      }
+    }
+
+    // Refresh real data from live database
+    await loadRealData();
+
+    // Increment doctor active cases in local state
     setStaffDoctors((prev) =>
       prev.map((d) => (d.id === chosenDoctor.id ? { ...d, activeCases: d.activeCases + 1 } : d))
     );
 
-    triggerToast(`Referral assigned to ${chosenDoctor.name} (${assignDepartment}, ${assignBay}).`);
+    triggerToast(`Inbound referral accepted & assigned to ${chosenDoctor.name}.`);
     setSelectedReferralToAssign(null);
-    setAssignNotes("");
   };
 
   const handleToggleDoctorStatus = (doctorId: string) => {
@@ -566,7 +776,6 @@ export default function MedicalPortalPage() {
   // Metrics
   const immediateCount = patients.filter((p) => p.triagePriority === "Immediate").length;
   const urgentCount = patients.filter((p) => p.triagePriority === "Urgent").length;
-  const pendingRxCount = prescriptions.filter((p) => p.status === "Pending Dispensing").length;
   const lowStockCount = inventory.filter((i) => i.status === "Low Stock" || i.status === "Critical").length;
   const pendingReferralsCount = referrals.filter((r) => r.status === "Pending Assignment").length;
 
@@ -735,18 +944,6 @@ export default function MedicalPortalPage() {
       icon: Package,
       badge: lowStockCount > 0 ? `${lowStockCount} Low` : undefined,
       badgeClass: "bg-rose-100 text-rose-800 font-black",
-    },
-    {
-      id: "prescriptions" as MedicalNavTab,
-      label: "e-Prescriptions",
-      icon: FileText,
-      badge: pendingRxCount > 0 ? pendingRxCount : undefined,
-      badgeClass: "bg-amber-100 text-amber-800",
-    },
-    {
-      id: "diagnostics" as MedicalNavTab,
-      label: "Diagnostic Lab",
-      icon: FlaskConical,
     },
   ];
 
@@ -933,15 +1130,11 @@ export default function MedicalPortalPage() {
               {/* Top Header like Doctor/Patient/Nurse page (no box) */}
               <div className="flex flex-col md:flex-row md:items-center justify-between gap-4">
                 <div>
-                  <div className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full text-xs font-bold bg-teal-50 text-teal-800 border border-teal-200/80 mb-2">
-                    <span className="w-2 h-2 rounded-full bg-teal-600 animate-pulse" />
-                    <span>Facility Dispensary &bull; Jan Aushadhi Clinical Node</span>
-                  </div>
                   <h1 className="text-2xl sm:text-3xl font-black text-slate-900 tracking-tight">
                     Medical Facility Command Center
                   </h1>
                   <p className="text-xs sm:text-sm text-slate-600 mt-1 max-w-2xl leading-relaxed">
-                    Facility Pharmacist: <strong className="text-slate-900">{staffName}</strong> &bull; Monitor patient intake, dispense doctor e-prescriptions, manage essential medicine stocks, and verify lab investigations.
+                    Facility Staff: <strong className="text-slate-900">{staffName}</strong> &bull; Monitor patient intake, review facility referrals, track bed occupancy, and manage essential medicine stocks.
                   </p>
                 </div>
 
@@ -1008,13 +1201,13 @@ export default function MedicalPortalPage() {
                   <div className="text-[11px] text-rose-700 font-semibold mt-1">ER Resuscitation</div>
                 </div>
 
-                <div className="bg-white p-4 sm:p-5 rounded-2xl border border-amber-200 bg-amber-50/20 shadow-2xs">
-                  <div className="flex items-center justify-between text-amber-800 text-xs font-bold">
-                    <span>Active Prescriptions</span>
-                    <FileText className="w-4 h-4 text-amber-600" />
+                <div className="bg-white p-4 sm:p-5 rounded-2xl border border-teal-200 bg-teal-50/20 shadow-2xs">
+                  <div className="flex items-center justify-between text-teal-800 text-xs font-bold">
+                    <span>Drug Inventory</span>
+                    <Package className="w-4 h-4 text-teal-600" />
                   </div>
-                  <div className="text-2xl sm:text-3xl font-black text-amber-700 mt-2">{pendingRxCount}</div>
-                  <div className="text-[11px] text-amber-700 font-semibold mt-1">To be dispensed</div>
+                  <div className="text-2xl sm:text-3xl font-black text-teal-700 mt-2">{inventory.length}</div>
+                  <div className="text-[11px] text-teal-700 font-semibold mt-1">Essential Stock Items</div>
                 </div>
               </div>
 
@@ -1155,10 +1348,6 @@ export default function MedicalPortalPage() {
               {/* Top Header like Doctor/Patient/Nurse page (no box) */}
               <div className="flex flex-col md:flex-row md:items-center justify-between gap-4">
                 <div>
-                  <div className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full text-xs font-bold bg-teal-50 text-teal-800 border border-teal-200/80 mb-2">
-                    <span className="w-2 h-2 rounded-full bg-teal-600 animate-pulse" />
-                    <span>Demographics &amp; Triage Registry &bull; Basic Details Mode</span>
-                  </div>
                   <h1 className="text-2xl sm:text-3xl font-black text-slate-900 tracking-tight">
                     Facility Patients Directory
                   </h1>
@@ -1330,10 +1519,6 @@ export default function MedicalPortalPage() {
               {/* Top Header like Doctor/Patient/Nurse page (no box) */}
               <div className="flex flex-col md:flex-row md:items-center justify-between gap-4">
                 <div>
-                  <div className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full text-xs font-bold bg-purple-50 text-purple-800 border border-purple-200/80 mb-2">
-                    <span className="w-2 h-2 rounded-full bg-purple-600 animate-pulse" />
-                    <span>Inter-Hospital Tele-Triage Network &bull; State Health Gateway</span>
-                  </div>
                   <h1 className="text-2xl sm:text-3xl font-black text-slate-900 tracking-tight flex items-center gap-2.5">
                     <ArrowRightLeft className="w-7 h-7 text-purple-700" />
                     <span>Inbound Hospital Referrals</span>
@@ -1430,6 +1615,11 @@ export default function MedicalPortalPage() {
 
                         {/* Referring Hospital & Doctor Source Badge */}
                         <div className="flex items-center gap-2 text-xs flex-wrap">
+                          <span className="inline-flex items-center gap-1 font-bold text-emerald-800 bg-emerald-50 px-2 py-0.5 rounded border border-emerald-200 text-[10px]">
+                            <Check className="w-3 h-3 text-emerald-600" />
+                            Patient Consent Accepted
+                          </span>
+                          <span className="text-slate-300">•</span>
                           <span className="font-semibold text-slate-400">Referred by:</span>
                           <span className="font-bold text-purple-900 bg-purple-50 px-2 py-0.5 rounded border border-purple-200">
                             {ref.referringDoctor}
@@ -1472,7 +1662,7 @@ export default function MedicalPortalPage() {
                           ) : (
                             <div className="text-xs text-amber-700 font-medium flex items-center gap-1.5">
                               <AlertTriangle className="w-3.5 h-3.5 text-amber-600" />
-                              <span>Patient awaiting internal doctor assignment to schedule consultation &amp; ward bay.</span>
+                              <span>Patient awaiting internal doctor assignment to undergo under review process.</span>
                             </div>
                           )}
 
@@ -1481,8 +1671,10 @@ export default function MedicalPortalPage() {
                             onClick={() => {
                               setSelectedReferralToAssign(ref);
                               const defaultDoc = staffDoctors.find((d) => d.status === "Available") || staffDoctors[0];
-                              setAssignDoctorId(defaultDoc.id);
-                              setAssignDepartment(defaultDoc.department);
+                              if (defaultDoc) setAssignDoctorId(defaultDoc.id);
+                              const now = new Date();
+                              now.setMinutes(now.getMinutes() + 30);
+                              setAssignTimeInput(toDateTimeLocalString(now));
                             }}
                             className={`px-4 py-2 rounded-xl text-xs font-bold transition-all shadow-xs flex items-center gap-1.5 cursor-pointer shrink-0 ${
                               ref.status === "Pending Assignment"
@@ -1491,7 +1683,7 @@ export default function MedicalPortalPage() {
                             }`}
                           >
                             <UserCheck className="w-3.5 h-3.5 text-teal-200" />
-                            <span>{ref.status === "Pending Assignment" ? "Assign to Doctor" : "Reassign Doctor"}</span>
+                            <span>{ref.status === "Pending Assignment" ? "Accept & Start Review" : "Reassign Doctor"}</span>
                           </button>
                         </div>
                       </div>
@@ -1508,10 +1700,6 @@ export default function MedicalPortalPage() {
               {/* Top Header like Doctor/Patient/Nurse page (no box) */}
               <div className="flex flex-col md:flex-row md:items-center justify-between gap-4">
                 <div>
-                  <div className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full text-xs font-bold bg-teal-50 text-teal-800 border border-teal-200/80 mb-2">
-                    <span className="w-2 h-2 rounded-full bg-teal-600 animate-pulse" />
-                    <span>Facility Capacity &bull; Real-time Telemetry &amp; Staffing Roster</span>
-                  </div>
                   <h1 className="text-2xl sm:text-3xl font-black text-slate-900 tracking-tight">
                     Medical Facility &amp; Staff Availability
                   </h1>
@@ -1764,10 +1952,6 @@ export default function MedicalPortalPage() {
               {/* Top Header like Doctor/Patient/Nurse page (no box) */}
               <div className="flex flex-col md:flex-row md:items-center justify-between gap-4">
                 <div>
-                  <div className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full text-xs font-bold bg-teal-50 text-teal-800 border border-teal-200/80 mb-2">
-                    <span className="w-2 h-2 rounded-full bg-teal-600 animate-pulse" />
-                    <span>Jan Aushadhi Kendra &bull; Stock &amp; Formulary Registry</span>
-                  </div>
                   <h1 className="text-2xl sm:text-3xl font-black text-slate-900 tracking-tight">
                     Essential Drug &amp; Supplies Inventory
                   </h1>
@@ -1864,158 +2048,6 @@ export default function MedicalPortalPage() {
                     </tbody>
                   </table>
                 </div>
-              </div>
-            </div>
-          </div>
-          )}
-
-          {/* TAB 4: e-PRESCRIPTIONS */}
-          {activeTab === "prescriptions" && (
-            <div className="space-y-6">
-              {/* Top Header like Doctor/Patient/Nurse page (no box) */}
-              <div className="flex flex-col md:flex-row md:items-center justify-between gap-4">
-                <div>
-                  <div className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full text-xs font-bold bg-teal-50 text-teal-800 border border-teal-200/80 mb-2">
-                    <span className="w-2 h-2 rounded-full bg-teal-600 animate-pulse" />
-                    <span>Physician Clinical Directives &bull; Dispensing Counter</span>
-                  </div>
-                  <h1 className="text-2xl sm:text-3xl font-black text-slate-900 tracking-tight">
-                    e-Prescriptions &amp; Medicine Dispensing
-                  </h1>
-                  <p className="text-xs sm:text-sm text-slate-600 mt-1 max-w-2xl leading-relaxed">
-                    Active physician drug orders forwarded from Doctor Command Station awaiting pharmacy verification and patient dispensing.
-                  </p>
-                </div>
-
-                <div className="flex items-center gap-2.5 shrink-0 flex-wrap">
-                  <div className="px-3.5 py-2 bg-amber-50 border border-amber-200 rounded-xl text-xs font-bold text-amber-800 shadow-2xs flex items-center gap-2">
-                    <Clock className="w-3.5 h-3.5 text-amber-600" />
-                    <span>{pendingRxCount} Pending Dispense</span>
-                  </div>
-                </div>
-              </div>
-
-              <div className="bg-white rounded-2xl border border-slate-200 shadow-2xs p-5 sm:p-6 space-y-4">
-              <div className="flex items-center justify-between border-b border-slate-100 pb-3">
-                <div>
-                  <h2 className="text-base font-black text-slate-900 tracking-tight">e-Prescription Dispensing Queue</h2>
-                  <p className="text-xs text-slate-500">Orders synced from attending medical officers.</p>
-                </div>
-              </div>
-
-              <div className="space-y-3">
-                {prescriptions.map((order) => (
-                  <div key={order.id} className="p-4 rounded-2xl border border-slate-200 bg-slate-50/50 flex flex-col sm:flex-row sm:items-center justify-between gap-3">
-                    <div>
-                      <div className="flex items-center gap-2">
-                        <span className="font-bold text-slate-900 text-sm">{order.patientName}</span>
-                        <span className="font-mono text-xs text-teal-800 font-bold bg-teal-50 px-1.5 py-0.5 rounded border border-teal-200">
-                          {order.uhid}
-                        </span>
-                        <span className={`text-[10px] font-bold px-2 py-0.5 rounded-full border ${getPriorityBadgeClass(order.urgency)}`}>
-                          {order.urgency}
-                        </span>
-                      </div>
-                      <p className="text-xs text-slate-500 mt-1">
-                        Prescribed by <strong>{order.doctorName}</strong> ({order.department}) • {order.prescribedAt}
-                      </p>
-                      <div className="text-xs text-slate-700 font-medium mt-1">
-                        Medicines: {order.medicines.map((m) => `${m.name} (${m.dosage})`).join(", ")}
-                      </div>
-                    </div>
-
-                    <div className="shrink-0">
-                      {order.status === "Dispensed" ? (
-                        <span className="inline-flex items-center gap-1 text-xs font-bold text-emerald-700 bg-emerald-50 px-3 py-1.5 rounded-xl border border-emerald-200">
-                          <CheckCircle2 className="w-4 h-4 text-emerald-600" />
-                          Dispensed
-                        </span>
-                      ) : (
-                        <button
-                          type="button"
-                          onClick={() => handleDispense(order.id)}
-                          className="px-3.5 py-2 bg-teal-800 hover:bg-teal-900 text-white rounded-xl text-xs font-bold transition-colors cursor-pointer"
-                        >
-                          Dispense Rx
-                        </button>
-                      )}
-                    </div>
-                  </div>
-                ))}
-              </div>
-            </div>
-          </div>
-          )}
-
-          {/* TAB 5: DIAGNOSTICS */}
-          {activeTab === "diagnostics" && (
-            <div className="space-y-6">
-              {/* Top Header like Doctor/Patient/Nurse page (no box) */}
-              <div className="flex flex-col md:flex-row md:items-center justify-between gap-4">
-                <div>
-                  <div className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full text-xs font-bold bg-teal-50 text-teal-800 border border-teal-200/80 mb-2">
-                    <span className="w-2 h-2 rounded-full bg-teal-600 animate-pulse" />
-                    <span>Clinical Laboratory Investigations &bull; Tele-Pathology</span>
-                  </div>
-                  <h1 className="text-2xl sm:text-3xl font-black text-slate-900 tracking-tight">
-                    Diagnostic Lab &amp; Test Results
-                  </h1>
-                  <p className="text-xs sm:text-sm text-slate-600 mt-1 max-w-2xl leading-relaxed">
-                    Hematology, digital radiology, and pathology reports synchronized from diagnostic analyzer equipment awaiting clinical verification.
-                  </p>
-                </div>
-
-                <div className="flex items-center gap-2.5 shrink-0 flex-wrap">
-                  <div className="px-3.5 py-2 bg-white border border-slate-200 rounded-xl text-xs font-bold text-slate-700 shadow-2xs flex items-center gap-2">
-                    <span className="text-slate-400">Total Investigations:</span>
-                    <span className="text-teal-800 font-extrabold">{labReports.length}</span>
-                  </div>
-                </div>
-              </div>
-
-              <div className="bg-white rounded-2xl border border-slate-200 shadow-2xs p-5 sm:p-6 space-y-4">
-              <div className="border-b border-slate-100 pb-3">
-                <h2 className="text-base font-black text-slate-900 tracking-tight">Diagnostic Lab &amp; Test Results</h2>
-                <p className="text-xs text-slate-500">Hematology, radiology and pathology investigations.</p>
-              </div>
-
-              <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-                {labReports.map((report) => (
-                  <div key={report.id} className="p-4 rounded-2xl border border-slate-200 bg-slate-50/50 space-y-2">
-                    <div className="flex items-center justify-between">
-                      <span className="font-mono text-[10px] font-bold text-teal-800 bg-teal-50 px-2 py-0.5 rounded border border-teal-200">
-                        {report.testCode}
-                      </span>
-                      <span className="text-[10px] font-bold text-rose-700 bg-rose-50 px-2 py-0.5 rounded border border-rose-200">
-                        {report.urgency}
-                      </span>
-                    </div>
-                    <div className="font-bold text-sm text-slate-900">{report.testName}</div>
-                    <p className="text-xs text-slate-500">
-                      Patient: <strong>{report.patientName}</strong> ({report.uhid})
-                    </p>
-                    <div className="p-2.5 bg-white rounded-xl border border-slate-200 text-xs text-slate-700 font-mono">
-                      {report.resultSummary}
-                    </div>
-                    <div className="pt-2 flex items-center justify-between text-xs">
-                      <span className="text-[10px] text-slate-400">Sample: {report.sampleCollected}</span>
-                      {report.status === "Verified" ? (
-                        <span className="inline-flex items-center gap-1 text-xs font-bold text-emerald-700">
-                          <CheckCircle2 className="w-3.5 h-3.5 text-emerald-600" />
-                          Verified
-                        </span>
-                      ) : (
-                        <button
-                          type="button"
-                          onClick={() => handleVerifyLab(report.id)}
-                          className="px-3 py-1 bg-teal-800 hover:bg-teal-900 text-white rounded-lg text-xs font-bold cursor-pointer"
-                        >
-                          Verify
-                        </button>
-                      )}
-                    </div>
-                  </div>
-                ))}
               </div>
             </div>
           </div>
@@ -2140,97 +2172,36 @@ export default function MedicalPortalPage() {
             </div>
 
             {/* Assignment Form */}
-            <form onSubmit={handleConfirmAssignment} className="space-y-3.5 text-xs">
-              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-                {/* Doctor Selection */}
-                <div>
-                  <label className="block text-slate-700 font-bold mb-1">
-                    Assign Specialist / Doctor <span className="text-rose-600">*</span>
-                  </label>
-                  <select
-                    value={assignDoctorId}
-                    onChange={(e) => {
-                      const docId = e.target.value;
-                      setAssignDoctorId(docId);
-                      const d = staffDoctors.find((x) => x.id === docId);
-                      if (d) {
-                        setAssignDepartment(d.department);
-                      }
-                    }}
-                    className="w-full px-3 py-2 bg-slate-50 border border-slate-300 rounded-xl text-slate-900 font-bold focus:bg-white focus:outline-teal-700"
-                  >
-                    {staffDoctors.map((doc) => (
-                      <option key={doc.id} value={doc.id}>
-                        {doc.name} • {doc.specialty} ({doc.status})
-                      </option>
-                    ))}
-                  </select>
-                </div>
-
-                {/* Target Department */}
-                <div>
-                  <label className="block text-slate-700 font-bold mb-1">Target Department</label>
-                  <select
-                    value={assignDepartment}
-                    onChange={(e) => setAssignDepartment(e.target.value)}
-                    className="w-full px-3 py-2 bg-slate-50 border border-slate-300 rounded-xl text-slate-900 font-semibold focus:bg-white focus:outline-teal-700"
-                  >
-                    <option value="Department of Medicine">Department of Medicine</option>
-                    <option value="Cardiology & Intensive Coronary Bay">Cardiology &amp; Intensive Coronary Bay</option>
-                    <option value="Pediatric Wing">Pediatric Wing</option>
-                    <option value="Orthopedic Surgery">Orthopedic Surgery</option>
-                    <option value="Maternity & Surgical Bay">Maternity &amp; Surgical Bay</option>
-                    <option value="Respiratory Medicine & ICU">Respiratory Medicine &amp; ICU</option>
-                    <option value="General Facility OPD">General Facility OPD</option>
-                  </select>
-                </div>
-              </div>
-
-              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-                {/* Ward / Bay */}
-                <div>
-                  <label className="block text-slate-700 font-bold mb-1">Assigned Location / Bay</label>
-                  <select
-                    value={assignBay}
-                    onChange={(e) => setAssignBay(e.target.value)}
-                    className="w-full px-3 py-2 bg-slate-50 border border-slate-300 rounded-xl text-slate-900 font-semibold focus:bg-white focus:outline-teal-700"
-                  >
-                    <option value="Emergency Bay 1 (Cardiac Telemetry)">Emergency Bay 1 (Cardiac Telemetry)</option>
-                    <option value="Emergency Bay 2 (Resuscitation)">Emergency Bay 2 (Resuscitation)</option>
-                    <option value="ICU Bed 02 (High Dependency)">ICU Bed 02 (High Dependency)</option>
-                    <option value="Ward Bed 08 (Orthopedic)">Ward Bed 08 (Orthopedic)</option>
-                    <option value="OPD Consultation Desk 102">OPD Consultation Desk 102</option>
-                    <option value="OPD Consultation Desk 105">OPD Consultation Desk 105</option>
-                    <option value="Observation Bay 3">Observation Bay 3</option>
-                  </select>
-                </div>
-
-                {/* Timeline */}
-                <div>
-                  <label className="block text-slate-700 font-bold mb-1">Consultation Timeline</label>
-                  <select
-                    value={assignTimeline}
-                    onChange={(e) => setAssignTimeline(e.target.value)}
-                    className="w-full px-3 py-2 bg-slate-50 border border-slate-300 rounded-xl text-slate-900 font-semibold focus:bg-white focus:outline-teal-700"
-                  >
-                    <option value="STAT Immediate (< 15 mins)">STAT Immediate (&lt; 15 mins)</option>
-                    <option value="Within 1 Hour">Within 1 Hour</option>
-                    <option value="Today OPD (Before 02:00 PM)">Today OPD (Before 02:00 PM)</option>
-                    <option value="Scheduled Tomorrow Morning">Scheduled Tomorrow Morning</option>
-                  </select>
-                </div>
-              </div>
-
+            <form onSubmit={handleConfirmAssignment} className="space-y-4 text-xs">
+              {/* Doctor Selection */}
               <div>
-                <label className="block text-slate-700 font-bold mb-1">
-                  Internal Routing Directives &amp; Nursing Instructions (Optional)
+                <label className="block text-slate-700 font-bold mb-1.5">
+                  Doctor Name <span className="text-rose-600">*</span>
                 </label>
-                <textarea
-                  rows={2}
-                  placeholder="e.g. Prepare continuous SpO2 monitoring and notify on-duty registrar immediately upon arrival."
-                  value={assignNotes}
-                  onChange={(e) => setAssignNotes(e.target.value)}
-                  className="w-full px-3 py-2 bg-slate-50 border border-slate-300 rounded-xl text-slate-900 font-medium focus:bg-white focus:outline-teal-700 resize-none"
+                <select
+                  value={assignDoctorId}
+                  onChange={(e) => setAssignDoctorId(e.target.value)}
+                  className="w-full px-3.5 py-2.5 bg-slate-50 border border-slate-300 rounded-xl text-slate-900 font-bold focus:bg-white focus:outline-teal-700 transition-colors"
+                >
+                  {staffDoctors.map((doc) => (
+                    <option key={doc.id} value={doc.id}>
+                      {doc.name} • {doc.specialty} ({doc.status})
+                    </option>
+                  ))}
+                </select>
+              </div>
+
+              {/* Consultation Timeline */}
+              <div>
+                <label className="block text-slate-700 font-bold mb-1.5 text-xs">
+                  Consultation Timeline <span className="text-rose-600">*</span>
+                </label>
+                <input
+                  type="datetime-local"
+                  required
+                  value={assignTimeInput}
+                  onChange={(e) => setAssignTimeInput(e.target.value)}
+                  className="w-full px-3.5 py-2.5 bg-slate-50 border border-slate-300 rounded-xl text-slate-900 font-semibold text-xs focus:bg-white focus:outline-teal-700 transition-colors"
                 />
               </div>
 
@@ -2247,7 +2218,7 @@ export default function MedicalPortalPage() {
                   className="px-5 py-2 bg-teal-800 hover:bg-teal-900 text-white font-bold rounded-xl shadow-xs transition-colors flex items-center gap-1.5 cursor-pointer"
                 >
                   <UserCheck className="w-4 h-4 text-teal-200" />
-                  <span>Confirm Assignment &amp; Notify Ward</span>
+                  <span>Confirm Assignment</span>
                 </button>
               </div>
             </form>

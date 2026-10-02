@@ -1,7 +1,7 @@
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from config import CORS_ORIGINS
-from routers import triage, ocr, users, analytics, reminders
+from routers import triage, ocr, users, analytics, reminders, auth
 
 app = FastAPI(
     title="TriageAssist Healthcare Platform API",
@@ -9,15 +9,18 @@ app = FastAPI(
     version="1.0.0"
 )
 
+# CORS configuration supporting credentials (required for HttpOnly cookies)
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"], # Allow development frontends
+    allow_origins=CORS_ORIGINS,
+    allow_origin_regex=r"^https?://(localhost|127\.0\.0\.1)(:[0-9]+)?$",
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
 
 # Mount feature routers
+app.include_router(auth.router)
 app.include_router(triage.router)
 app.include_router(ocr.router)
 app.include_router(users.router)

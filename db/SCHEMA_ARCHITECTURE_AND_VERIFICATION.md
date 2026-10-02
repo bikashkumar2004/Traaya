@@ -9,7 +9,7 @@ This document presents the complete relational database architecture for **Triag
 | # | Role | Primary Routes | Core Responsibilities | Key Database Tables |
 |---|---|---|---|---|
 | **1** | **Patient** | `/patient`, `/patient/symptoms`, `/patient/timeline`, `/patient/timeline/[id]`, `/patient/reminders`, `/patient/upload`, `/patient/profile` | Self/Family symptom intake, voice triage, viewing live clinical journey, logging vitals, medication adherence, lab report upload. | `profiles`, `triage_tickets`, `patient_reminders`, `patient_vitals_logs`, `medical_reports` |
-| **2** | **Nurse** | `/nurse`, `/nurse/intake`, `/nurse/escalations`, `/nurse/ocr`, `/nurse/profile` | Rapid 5-step intake, vitals verification, triaging walk-in patients, initiating doctor handoffs, OCR validation of lab slips. | `nurse_profiles`, `triage_tickets`, `nurse_review_actions`, `phc_staff_roster`, `phc_facilities` |
+| **2** | **Nurse** | `/nurse`, `/nurse/intake`, `/nurse/escalations`, `/nurse/ocr`, `/nurse/profile` | Rapid 5-step intake, vitals verification, triaging walk-in patients, initiating doctor handoffs, OCR validation of lab slips. | `nurse_profiles`, `triage_tickets`, `phc_staff_roster`, `phc_facilities` |
 | **3** | **Doctor** | `/doctor`, `/doctor/decision`, `/doctor/history`, `/doctor/analytics`, `/doctor/audit` | High-priority patient queue, clinical diagnosis, overriding AI urgency, e-prescriptions, admission or tertiary hospital escalation. | `triage_tickets`, `audit_logs`, `medical_prescriptions`, `hospital_referrals` |
 | **4** | **Medical / Pharmacy** | `/medical` | Prescription fulfillment, Jan Aushadhi inventory stock tracking, bed/ICU/oxygen telemetry, receiving and assigning inter-hospital referrals. | `medical_prescriptions`, `medical_inventory`, `hospital_referrals`, `phc_facilities` |
 | **5** | **Organization** | `/organization` | Corporate, PSU, and University workforce health tracking, annual screening camps, chronic disease risk tiering, department health indices. | `organization_profiles`, `organization_screenings` |
@@ -33,7 +33,6 @@ erDiagram
     PHC_FACILITIES ||--o{ MEDICAL_INVENTORY : "stocks"
     PHC_FACILITIES ||--o{ HOSPITAL_REFERRALS : "receives referrals"
 
-    TRIAGE_TICKETS ||--o{ NURSE_REVIEW_ACTIONS : "audited changes"
     TRIAGE_TICKETS ||--o{ MEDICAL_PRESCRIPTIONS : "generates prescriptions"
     TRIAGE_TICKETS ||--o{ HOSPITAL_REFERRALS : "escalated via"
     TRIAGE_TICKETS ||--o{ AUDIT_LOGS : "decision audit"
@@ -89,19 +88,20 @@ The clinical core of the platform. Tracks patient encounters across their lifecy
 * `referal_facility` (`TEXT`): Target hospital/tertiary center for patient referral.
 * `referal_facility_id` (`UUID`, FK $\rightarrow$ `profiles.id`): Target facility identifier linking to `profiles` table (`role = 'facility'`).
 * `transfer_reason` (`TEXT`): Clinical indication and transfer summary for referral.
-* `prescriptions` (`JSONB`): Formulated medications from doctor.
+* `referred_from_ticket_id` (`UUID`, FK $\rightarrow$ `triage_tickets.id`): Reference to originating ticket when a referral spawns a new triage ticket at receiving facility.
+* `referred_from_facility` (`TEXT`): Originating hospital/facility name.
+* `patient_referral_status` (`TEXT`): Patient consent status (`'Pending'`, `'Accepted'`, `'Declined'`). Default `'Pending'`.
+* `patient_referral_accepted_at` (`TIMESTAMPTZ`): Timestamp when patient accepts the referral.
+* `facility_referral_status` (`TEXT`): Target facility intake status (`'Pending'`, `'Accepted'`, `'Declined'`). Default `'Pending'`.
+* `facility_referral_accepted_at` (`TIMESTAMPTZ`): Timestamp when target facility accepts the inbound case.
+* `referral_notes` (`TEXT`): Clinical intake notes or patient remarks.
 
-### 3.3 `hospital_referrals`
-Powers the inter-hospital referral workflow in `/medical`.
-* `id` (`UUID`, PK).
-* `ticket_id` (`UUID`, FK $\rightarrow$ `triage_tickets.id`).
-* `patient_uhid` (`TEXT`), `patient_name` (`TEXT`), `phone` (`TEXT`).
-* `referring_hospital` (`TEXT`), `referring_doctor` (`TEXT`).
-* `target_facility_id` (`UUID`, FK $\rightarrow$ `phc_facilities.id`).
-* `assigned_doctor_id` (`UUID`, FK $\rightarrow$ `profiles.id`).
-* `triage_priority` (`TEXT`): `'Immediate'`, `'Urgent'`, `'Less Urgent'`, `'Routine'`.
-* `status` (`TEXT`): `'Pending Review'`, `'Accepted & Assigned'`, `'In Transit'`, `'Admitted'`, `'Declined'`, `'Completed'`.
-* `assignment_notes` (`TEXT`): Facility assignment and bed instructions.
+### 3.3 Single Source of Truth for Referrals (`triage_tickets`)
+All triage and referral workflows are consolidated directly into `triage_tickets` across 4 stages:
+1. **Initiation**: Clinician at Facility A refers patient $\rightarrow$ ticket marked with `status = 'Referred'`, `referal_facility`, `referal_facility_id`, `transfer_reason`, `patient_referral_status = 'Pending'`.
+2. **Patient Acceptance**: Patient is notified in their portal/app with destination hospital and reason. Patient accepts $\rightarrow$ `patient_referral_status = 'Accepted'`, `patient_referral_accepted_at = now()`.
+3. **Inbound Roster Display**: Case appears in the "Hospital Referrals" page of the destination facility (`referal_facility_id`) only after patient acceptance.
+4. **Under Review Restart**: Destination facility clicks 'Accept & Start Review' $\rightarrow$ `facility_referral_status = 'Accepted'`, `facility_referral_accepted_at = now()`, `facility_id = referal_facility_id`, `nurse_id = NULL`, `doctor_id = NULL`, `assigned_doctor_name = NULL`, and `status = 'Under Review'`. The patient enters the destination facility's triage queue for clean clinical re-evaluation. When the destination nurse or doctor subsequently takes action, `nurse_id` or `doctor_id` is updated with the new clinician's ID!
 
 ### 3.4 `medical_inventory` & `medical_prescriptions`
 Powers the Jan Aushadhi dispensary and pharmacy operations in `/medical`.
@@ -134,7 +134,7 @@ Powers clinical governance in `/doctor/audit`.
 | **Vitals Logging** | `/patient/reminders` | `POST /api/reminders/vitals` | `INSERT INTO patient_vitals_logs (...)` |
 | **Lab OCR Upload** | `/patient/upload` | `POST /api/ocr/analyze` | Uploads file to bucket $\rightarrow$ inserts into `medical_reports` |
 | **Nurse Desk** | `/nurse` | `GET /api/triage/patient-tickets` | Filter by `status = 'Awaiting Nurse Review'` |
-| **Nurse Review** | `/nurse?review={case_number}` | `POST /api/triage/nurse-review` | `INSERT INTO nurse_review_actions` + updates ticket |
+| **Nurse Review** | `/nurse?review={case_number}` | `POST /api/triage/nurse-review` | Directly updates `triage_tickets` (`nurse_id`, status, notes) |
 | **Doctor Queue** | `/doctor` | `GET /api/triage/patient-tickets` | Filter by `urgency in ('Immediate', 'High Priority')` |
 | **Doctor Decision** | `/doctor/decision?id={id}` | `POST /api/triage/override` | Inserts into `audit_logs`, updates ticket with prescription |
 | **Medical Referral** | `/medical?tab=referrals` | `GET /api/medical/referrals` | `SELECT * FROM hospital_referrals WHERE target_facility_id = ...` |

@@ -40,11 +40,11 @@ export function PatientShell({ children }: PatientShellProps) {
   const [emergencyModalOpen, setEmergencyModalOpen] = useState(false);
   const [ashaModalOpen, setAshaModalOpen] = useState(false);
 
-  const actualFullName = user?.fullName || "Bikash Kumar Choudhury";
-  const actualPatientId = user?.patientUhid || "PAT-8402";
+  const actualFullName = user?.fullName || "";
+  const actualPatientId = user?.patientUhid || user?.userId || "";
 
   const getInitials = (name: string) => {
-    if (!name) return "BC";
+    if (!name) return "PT";
     const parts = name.trim().split(/\s+/);
     if (parts.length === 1) return parts[0].slice(0, 2).toUpperCase();
     return (parts[0][0] + parts[parts.length - 1][0]).toUpperCase();
@@ -275,15 +275,27 @@ export function PatientShell({ children }: PatientShellProps) {
               title="View Profile & Settings"
             >
               <div className="w-8 h-8 rounded-full bg-teal-800 text-white flex items-center justify-center font-bold text-xs shadow-xs ring-2 ring-teal-600/20 shrink-0 group-hover:scale-105 transition-transform">
-                {getInitials(actualFullName)}
+                {actualFullName ? (
+                  getInitials(actualFullName)
+                ) : (
+                  <span className="inline-block w-4 h-4 bg-teal-600/60 rounded-full animate-pulse" />
+                )}
               </div>
               <div className="text-left hidden sm:block">
-                <span className="text-xs font-bold text-slate-900 block leading-tight truncate max-w-[150px]">
-                  {actualFullName}
-                </span>
-                <span className="text-[10px] text-teal-700 font-semibold block leading-none">
-                  Patient
-                </span>
+                {actualFullName ? (
+                  <span className="text-xs font-bold text-slate-900 block leading-tight truncate max-w-[150px]">
+                    {actualFullName}
+                  </span>
+                ) : (
+                  <div className="h-3 w-20 bg-slate-200 rounded animate-pulse my-0.5" />
+                )}
+                {actualPatientId ? (
+                  <span className="text-[10px] text-teal-700 font-semibold block leading-none font-mono">
+                    {actualPatientId}
+                  </span>
+                ) : (
+                  <div className="h-2.5 w-14 bg-teal-100 rounded animate-pulse mt-0.5" />
+                )}
               </div>
             </Link>
 

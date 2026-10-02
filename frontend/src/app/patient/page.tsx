@@ -57,6 +57,13 @@ interface TriageTicket {
     };
   };
   status: string;
+  referal_facility?: string;
+  referal_facility_id?: string;
+  transfer_reason?: string;
+  patient_referral_status?: string;
+  patient_referral_accepted_at?: string;
+  facility_referral_status?: string;
+  referral_notes?: string;
   created_at: string;
 }
 
@@ -84,6 +91,19 @@ export default function PatientDashboard() {
   const [loading, setLoading] = useState<boolean>(true);
   const [syncing, setSyncing] = useState<boolean>(false);
 
+  // Hydrate cached data from sessionStorage on mount (client-only, after hydration)
+  useEffect(() => {
+    try {
+      const cachedTickets = sessionStorage.getItem("triage_cached_tickets");
+      if (cachedTickets) {
+        setTickets(JSON.parse(cachedTickets));
+        setLoading(false);
+      }
+      const cachedReminders = sessionStorage.getItem("triage_cached_reminders");
+      if (cachedReminders) setReminders(JSON.parse(cachedReminders));
+    } catch {}
+  }, []);
+
   // Fetch real data from Supabase backend
   const loadDashboardData = async () => {
     if (!user?.id) return;
@@ -95,7 +115,11 @@ export default function PatientDashboard() {
       );
       if (ticketsRes.ok) {
         const tData = await ticketsRes.json();
-        setTickets(tData.tickets || []);
+        const incomingTickets = tData.tickets || [];
+        setTickets(incomingTickets);
+        if (typeof window !== "undefined") {
+          sessionStorage.setItem("triage_cached_tickets", JSON.stringify(incomingTickets));
+        }
       }
 
       // 2. Fetch live reminders schedule from Supabase
@@ -104,7 +128,11 @@ export default function PatientDashboard() {
       );
       if (remindersRes.ok) {
         const rData = await remindersRes.json();
-        setReminders(rData.reminders || []);
+        const incomingReminders = rData.reminders || [];
+        setReminders(incomingReminders);
+        if (typeof window !== "undefined") {
+          sessionStorage.setItem("triage_cached_reminders", JSON.stringify(incomingReminders));
+        }
       }
     } catch (err) {
       console.error("[Dashboard Load Error]", err);
@@ -179,12 +207,8 @@ export default function PatientDashboard() {
       {/* Top Welcome & ABDM Citizen Header */}
       <div className="flex flex-col md:flex-row md:items-center justify-between gap-4">
         <div>
-          <div className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full text-xs font-bold bg-teal-50 text-teal-800 border border-teal-200/80 mb-2">
-            <Radio className="w-3 h-3 text-teal-600 animate-pulse" />
-            <span>Citizen Health Command Center</span>
-          </div>
           <h1 className="text-2xl sm:text-3xl font-black text-slate-900 tracking-tight">
-            Namaste, {user?.fullName || "Citizen"}
+            Namaste, {user?.fullName || <span className="inline-block w-32 h-6 bg-slate-200 rounded-lg animate-pulse align-middle" />}
           </h1>
           <p className="text-xs sm:text-sm text-slate-600 mt-1 max-w-2xl leading-relaxed">
             Welcome to your digital triage health locker. Monitor your active care tickets, check medication schedules, or consult frontline ASHA workers.
@@ -196,7 +220,7 @@ export default function PatientDashboard() {
           <div className="px-3 py-1.5 bg-white border border-slate-200 rounded-xl text-xs font-semibold text-slate-700 shadow-2xs flex items-center gap-1.5">
             <Building2 className="w-3.5 h-3.5 text-teal-700" />
             <span className="truncate max-w-[180px]">
-              {user?.facilityName || "Primary Health Centre (PHC)"}
+              {user?.facilityName || <span className="inline-block w-24 h-3 bg-slate-200 rounded animate-pulse" />}
             </span>
           </div>
 
@@ -216,8 +240,82 @@ export default function PatientDashboard() {
         </div>
       </div>
 
+      {/* REFERRAL CONSENT PROMPT (If Active Ticket is Referred) */}
+      {activeTicket && normalizeStatus(activeTicket.status) === "Referred" && (
+        <div className={`rounded-2xl border p-5 sm:p-6 shadow-xs transition-all ${
+          activeTicket.patient_referral_status === "Accepted"
+            ? "bg-gradient-to-r from-emerald-50 via-teal-50/40 to-white border-emerald-300"
+            : "bg-gradient-to-r from-purple-50 via-pink-50/30 to-white border-purple-300 shadow-sm"
+        }`}>
+          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
+            <div className="flex items-start gap-3.5 min-w-0">
+              <div className={`w-11 h-11 rounded-2xl flex items-center justify-center shrink-0 shadow-xs ${
+                activeTicket.patient_referral_status === "Accepted"
+                  ? "bg-emerald-600 text-white"
+                  : "bg-purple-700 text-white"
+              }`}>
+                {activeTicket.patient_referral_status === "Accepted" ? (
+                  <CheckCircle2 className="w-5 h-5" />
+                ) : (
+                  <Building2 className="w-5 h-5" />
+                )}
+              </div>
+              <div className="space-y-1 min-w-0">
+                <div className="flex items-center gap-2 flex-wrap">
+                  <span className="font-extrabold text-slate-900 text-sm sm:text-base">
+                    {activeTicket.patient_referral_status === "Accepted"
+                      ? "Referral Consent Confirmed & Transferred"
+                      : "Action Required: Hospital Referral Consent Pending"}
+                  </span>
+                  <span className={`px-2.5 py-0.5 rounded-full text-[10px] font-bold border ${
+                    activeTicket.patient_referral_status === "Accepted"
+                      ? "bg-emerald-100 text-emerald-800 border-emerald-300"
+                      : "bg-purple-100 text-purple-900 border-purple-300 animate-pulse"
+                  }`}>
+                    {activeTicket.patient_referral_status === "Accepted" ? "✓ Consent Given" : "Consent Needed"}
+                  </span>
+                </div>
+                <p className="text-xs text-slate-700 leading-relaxed max-w-2xl">
+                  {activeTicket.patient_referral_status === "Accepted" ? (
+                    <>
+                      Your consent to transfer to <strong className="text-emerald-950 font-bold">{activeTicket.referal_facility || "Tertiary Specialist Hospital"}</strong> has been submitted. The receiving hospital is reviewing your case.
+                    </>
+                  ) : (
+                    <>
+                      Your attending clinician has recommended referral to <strong className="text-purple-950 font-bold">{activeTicket.referal_facility || "Tertiary Specialist Hospital"}</strong>. Reason: <em>&ldquo;{activeTicket.transfer_reason || "Tertiary evaluation"}&rdquo;</em>. Please review and provide consent to transfer your digital health records.
+                    </>
+                  )}
+                </p>
+              </div>
+            </div>
+
+            <div className="flex items-center gap-2 shrink-0 self-end sm:self-center">
+              <Link
+                href={`/patient/timeline/${activeTicket.id}`}
+                className={`px-4 py-2.5 rounded-xl text-xs font-bold shadow-xs flex items-center justify-center gap-1.5 transition-colors cursor-pointer ${
+                  activeTicket.patient_referral_status === "Accepted"
+                    ? "bg-white hover:bg-slate-50 text-slate-800 border border-slate-300"
+                    : "bg-purple-700 hover:bg-purple-800 text-white"
+                }`}
+              >
+                <span>{activeTicket.patient_referral_status === "Accepted" ? "View Referral Status" : "Review & Accept Transfer"}</span>
+                <ArrowRight className="w-4 h-4" />
+              </Link>
+            </div>
+          </div>
+        </div>
+      )}
+
       {/* 1. ACTIVE CLINICAL ENCOUNTER BANNER (Live from Supabase) */}
-      {activeTicket ? (
+      {loading && tickets.length === 0 ? (
+        <div className="bg-white rounded-2xl border border-slate-200 p-5 sm:p-6 shadow-xs flex items-center gap-3.5 animate-pulse">
+          <div className="w-12 h-12 rounded-2xl bg-slate-100 shrink-0" />
+          <div className="space-y-2 flex-1">
+            <div className="h-4 bg-slate-100 rounded w-1/3" />
+            <div className="h-3 bg-slate-100 rounded w-2/3" />
+          </div>
+        </div>
+      ) : activeTicket ? (
         <div className="bg-gradient-to-r from-teal-50/90 via-emerald-50/50 to-white rounded-2xl border border-teal-300/80 p-5 sm:p-6 shadow-xs flex flex-col md:flex-row md:items-center justify-between gap-4 transition-all">
           <div className="flex items-start sm:items-center gap-3.5 min-w-0">
             <div className="w-12 h-12 rounded-2xl bg-teal-800 text-white flex items-center justify-center shrink-0 shadow-xs">
@@ -695,7 +793,7 @@ export default function PatientDashboard() {
 
             <div className="space-y-2 text-xs">
               <div className="font-bold text-slate-900">
-                {user?.facilityName || "Primary Health Centre (PHC)"}
+                {user?.facilityName || <span className="inline-block w-36 h-3.5 bg-slate-200 rounded animate-pulse" />}
               </div>
               <p className="text-slate-500 text-[11px] leading-relaxed">
                 OPD Hours: 08:30 AM &ndash; 02:00 PM &bull; Emergency Observation Bed Available
@@ -703,7 +801,7 @@ export default function PatientDashboard() {
               <div className="pt-2 border-t border-slate-100 flex items-center justify-between text-[11px]">
                 <span className="text-slate-600">Citizen UHID:</span>
                 <span className="font-mono font-bold text-teal-800">
-                  {user?.patientUhid || "PAT-8402"}
+                  {user?.patientUhid || <span className="inline-block w-20 h-3 bg-teal-100 rounded animate-pulse" />}
                 </span>
               </div>
             </div>

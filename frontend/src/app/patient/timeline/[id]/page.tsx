@@ -28,6 +28,11 @@ import {
   Sparkles,
   Send,
   HelpCircle,
+  Check,
+  ArrowRightLeft,
+  Pill,
+  CalendarCheck,
+  UserCheck,
 } from "lucide-react";
 import { useAuth } from "@/lib/auth-context";
 import { supabase } from "@/lib/supabase";
@@ -147,6 +152,9 @@ interface TriageTicket {
         phone?: string;
         user_id?: string;
       }>;
+  doctor_profile?: { full_name?: string } | Array<{ full_name?: string }>;
+  nurse_profile?: { full_name?: string } | Array<{ full_name?: string }>;
+  facility_profile?: { full_name?: string } | Array<{ full_name?: string }>;
   vitals?: {
     temperature?: string;
     follow_up_answers?: Record<string, any>;
@@ -164,6 +172,14 @@ interface TriageTicket {
   status: string;
   created_at: string;
   updated_at?: string;
+  patient_referral_status?: "Pending" | "Accepted" | "Declined";
+  patient_referral_accepted_at?: string;
+  facility_referral_status?: "Pending" | "Accepted" | "Declined";
+  facility_referral_accepted_at?: string;
+  referal_facility?: string;
+  referal_facility_id?: string;
+  transfer_reason?: string;
+  referral_notes?: string;
 }
 
 export default function PatientTicketDetailPage() {
@@ -252,6 +268,34 @@ export default function PatientTicketDetailPage() {
     }
   };
 
+  const [isUpdatingReferral, setIsUpdatingReferral] = useState(false);
+
+  const handlePatientReferralAction = async (action: "Accepted" | "Declined") => {
+    if (!ticket?.id) return;
+    setIsUpdatingReferral(true);
+    try {
+      if (supabase) {
+        await supabase
+          .from("triage_tickets")
+          .update({
+            patient_referral_status: action,
+            patient_referral_accepted_at: action === "Accepted" ? new Date().toISOString() : null,
+            updated_at: new Date().toISOString(),
+          })
+          .eq("id", ticket.id);
+      }
+      setTicket((prev) => (prev ? {
+        ...prev,
+        patient_referral_status: action,
+        patient_referral_accepted_at: action === "Accepted" ? new Date().toISOString() : undefined,
+      } : null));
+    } catch (e) {
+      console.error("Error updating patient referral:", e);
+    } finally {
+      setIsUpdatingReferral(false);
+    }
+  };
+
   useEffect(() => {
     async function fetchTicket() {
       if (!ticketId) return;
@@ -280,7 +324,7 @@ export default function PatientTicketDetailPage() {
           const isUuid = /^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$/.test(ticketId);
           let query = supabase
             .from("triage_tickets")
-            .select("*, profiles:patient_id(full_name, age, gender, phone, user_id)");
+            .select("*, profiles:patient_id(full_name, age, gender, phone, user_id), doctor_profile:doctor_id(full_name), nurse_profile:nurse_id(full_name), facility_profile:facility_id(full_name)");
 
           if (isUuid) {
             query = query.eq("id", ticketId);
@@ -535,6 +579,75 @@ export default function PatientTicketDetailPage() {
   const dischargeReportText = valOrDash(ticket.discharge_report_text);
   const dischargeReportUrl = ticket.discharge_report_url;
 
+  // Safely parse structured discharge report if available
+  let parsedDischarge: {
+    hospitalName?: string;
+    hospitalAddress?: string;
+    contactInfo?: string;
+    clinicalSummary?: string;
+    treatmentProvided?: string;
+    dischargeCondition?: string;
+    prescribedMedications?: Array<{
+      name?: string;
+      dosage?: string;
+      frequency?: string;
+      duration?: string;
+    }>;
+    followUpInstructions?:
+      | {
+          recommendedFollowUp?: string;
+          nextFollowUpDate?: string;
+          lifestyleDietaryInstructions?: string;
+        }
+      | string;
+    physician?: {
+      name?: string;
+      qualification?: string;
+      regNo?: string;
+      contact?: string;
+    };
+    [key: string]: any;
+  } | null = null;
+
+  if (ticket.discharge_report_text) {
+    if (typeof ticket.discharge_report_text === "object") {
+      parsedDischarge = ticket.discharge_report_text as any;
+    } else if (typeof ticket.discharge_report_text === "string") {
+      const trimmed = ticket.discharge_report_text.trim();
+      if (trimmed.startsWith("{") || trimmed.startsWith("[")) {
+        try {
+          parsedDischarge = JSON.parse(trimmed);
+        } catch {
+          parsedDischarge = null;
+        }
+      }
+    }
+  }
+
+  const getNameFromProfile = (p: any) => {
+    if (!p) return null;
+    if (Array.isArray(p)) return p[0]?.full_name || null;
+    if (typeof p === "object") return p.full_name || null;
+    return null;
+  };
+
+  const treatedDoctorName =
+    getNameFromProfile(ticket.doctor_profile) ||
+    ticket.assigned_doctor_name ||
+    parsedDischarge?.physician?.name ||
+    (ticket.doctor_id ? "Assigned Medical Officer" : null);
+
+  const treatedNurseName =
+    getNameFromProfile(ticket.nurse_profile) ||
+    ticket.assigned_nurse_name ||
+    (ticket.nurse_id ? "Assigned Clinical Nurse" : null);
+
+  const treatedFacilityName =
+    getNameFromProfile(ticket.facility_profile) ||
+    (ticket.present_address as any)?.facility_name ||
+    parsedDischarge?.hospitalName ||
+    (ticket.facility_id ? "Assigned Healthcare Facility" : null);
+
   // 10. Citizen Patient & Family Demographics
   const isFamily = Boolean(ticket.is_family_member);
   const profileRaw = ticket.profiles;
@@ -691,6 +804,99 @@ export default function PatientTicketDetailPage() {
               </div>
             );
           })()}
+        </div>
+      )}
+
+      {/* Referral Consent & Direct Action Banner */}
+      {normalizeStatus(ticket.status) === "Referred" && (
+        <div className="space-y-3">
+          {ticket.patient_referral_status === "Accepted" ? (
+            <div className="bg-purple-50/80 border border-purple-300 rounded-2xl p-4 sm:p-5 flex flex-col sm:flex-row sm:items-center justify-between gap-4 shadow-2xs">
+              <div className="flex items-start gap-3.5">
+                <div className="w-10 h-10 rounded-xl bg-purple-100 text-purple-800 flex items-center justify-center shrink-0 border border-purple-200">
+                  <CheckCircle2 className="w-5 h-5 text-purple-700" />
+                </div>
+                <div>
+                  <div className="flex items-center gap-2 flex-wrap">
+                    <h3 className="text-sm font-bold text-purple-950">Referral Accepted by You</h3>
+                    <span className="text-[10px] font-bold px-2 py-0.5 rounded-full bg-emerald-100 text-emerald-800 border border-emerald-300">
+                      {ticket.facility_referral_status === "Accepted"
+                        ? "Under Review at Facility"
+                        : "Sent to Hospital Referrals Roster"}
+                    </span>
+                  </div>
+                  <p className="text-xs text-purple-900 mt-0.5">
+                    Destination Hospital: <strong className="text-purple-950 font-bold">{ticket.referal_facility || "Specialist Hospital"}</strong>
+                  </p>
+                  {ticket.transfer_reason && (
+                    <p className="text-xs text-purple-700 mt-0.5">
+                      Clinical reason: {ticket.transfer_reason}
+                    </p>
+                  )}
+                </div>
+              </div>
+            </div>
+          ) : ticket.patient_referral_status === "Declined" ? (
+            <div className="bg-slate-50 border border-slate-300 rounded-2xl p-4 sm:p-5 flex items-center justify-between gap-3 text-xs text-slate-700 shadow-2xs">
+              <div>
+                <strong>Referral Declined:</strong> You opted not to transfer to {ticket.referal_facility || "the destination facility"}.
+              </div>
+              <button
+                type="button"
+                onClick={() => handlePatientReferralAction("Accepted")}
+                disabled={isUpdatingReferral}
+                className="px-3.5 py-1.5 bg-purple-700 hover:bg-purple-800 text-white font-bold text-xs rounded-xl shadow-xs cursor-pointer"
+              >
+                Change Mind &amp; Accept
+              </button>
+            </div>
+          ) : (
+            <div className="bg-linear-to-r from-purple-50 via-indigo-50/40 to-white border-2 border-purple-400 rounded-2xl p-5 shadow-sm space-y-3">
+              <div className="flex items-start gap-3.5">
+                <div className="w-11 h-11 rounded-2xl bg-purple-700 text-white flex items-center justify-center shrink-0 shadow-xs">
+                  <Building2 className="w-6 h-6" />
+                </div>
+                <div className="flex-1 min-w-0">
+                  <div className="flex items-center gap-2 flex-wrap">
+                    <span className="text-[10px] font-black uppercase tracking-wider px-2 py-0.5 rounded-md bg-purple-200 text-purple-900 border border-purple-300">
+                      Action Required &bull; Referral Consent
+                    </span>
+                  </div>
+                  <h3 className="text-base font-extrabold text-slate-900 mt-1">
+                    Transfer Recommended to {ticket.referal_facility || "Higher Facility"}
+                  </h3>
+                  <p className="text-xs text-slate-600 mt-1 leading-relaxed">
+                    The attending medical officer has referred your case for higher-level diagnostic review and care. Please accept this referral so the destination hospital can review your case and initiate care.
+                  </p>
+                  {ticket.transfer_reason && (
+                    <div className="mt-2 p-2.5 bg-white/90 rounded-xl border border-purple-200 text-xs text-purple-900">
+                      <strong>Clinical Transfer Reason:</strong> {ticket.transfer_reason}
+                    </div>
+                  )}
+                </div>
+              </div>
+
+              <div className="flex items-center justify-end gap-2.5 pt-2 border-t border-purple-100">
+                <button
+                  type="button"
+                  onClick={() => handlePatientReferralAction("Declined")}
+                  disabled={isUpdatingReferral}
+                  className="px-4 py-2 bg-white hover:bg-slate-50 border border-slate-300 text-slate-700 font-bold text-xs rounded-xl shadow-2xs transition-colors cursor-pointer"
+                >
+                  Decline
+                </button>
+                <button
+                  type="button"
+                  onClick={() => handlePatientReferralAction("Accepted")}
+                  disabled={isUpdatingReferral}
+                  className="px-5 py-2 bg-purple-700 hover:bg-purple-800 text-white font-bold text-xs rounded-xl shadow-xs transition-colors flex items-center gap-1.5 cursor-pointer disabled:opacity-50"
+                >
+                  <Check className="w-4 h-4" />
+                  <span>{isUpdatingReferral ? "Saving..." : "Accept Referral & Transfer"}</span>
+                </button>
+              </div>
+            </div>
+          )}
         </div>
       )}
 
@@ -1292,19 +1498,19 @@ export default function PatientTicketDetailPage() {
               <div className="p-3 rounded-xl bg-slate-50 border border-slate-100">
                 <span className="text-[10px] text-slate-400 font-bold uppercase block">Assigned Doctor</span>
                 <p className="font-bold text-slate-800 text-xs mt-0.5">
-                  {valOrDash(ticket.assigned_doctor_name || (ticket.doctor_id ? "Assigned Medical Officer" : null))}
+                  {valOrDash(treatedDoctorName)}
                 </p>
               </div>
               <div className="p-3 rounded-xl bg-slate-50 border border-slate-100">
                 <span className="text-[10px] text-slate-400 font-bold uppercase block">Assigned Nurse</span>
                 <p className="font-bold text-slate-800 text-xs mt-0.5">
-                  {valOrDash(ticket.assigned_nurse_name || (ticket.nurse_id ? "Assigned Clinical Nurse" : null))}
+                  {valOrDash(treatedNurseName)}
                 </p>
               </div>
               <div className="p-3 rounded-xl bg-slate-50 border border-slate-100 col-span-2">
-                <span className="text-[10px] text-slate-400 font-bold uppercase block">Assigned Dispensary / Facility Staff</span>
+                <span className="text-[10px] text-slate-400 font-bold uppercase block">Assigned Facility / Dispensary</span>
                 <p className="font-bold text-slate-800 text-xs mt-0.5">
-                  {valOrDash((ticket.facility_id || ticket.medical_id) ? "Assigned Facility Pharmacy" : null)}
+                  {valOrDash(treatedFacilityName || ((ticket.facility_id || ticket.medical_id) ? "Assigned Facility Pharmacy" : null))}
                 </p>
               </div>
             </div>
@@ -1318,35 +1524,163 @@ export default function PatientTicketDetailPage() {
               </p>
             </div>
           </div>
-
-          {/* Card 4: Physician Consultation & Discharge Summary */}
-          <div className="bg-white rounded-2xl border border-slate-200 shadow-xs p-6 space-y-3 text-xs">
-            <div className="flex items-center justify-between pb-3 border-b border-slate-100">
-              <div className="flex items-center gap-2">
-                <Stethoscope className="w-4 h-4 text-teal-700" />
-                <h3 className="text-sm font-bold text-slate-900 uppercase tracking-wide">
-                  Discharge Summary &amp; Physician Advice
-                </h3>
-              </div>
-              {dischargeReportUrl && (
-                <a
-                  href={dischargeReportUrl}
-                  target="_blank"
-                  rel="noopener noreferrer"
-                  className="text-[11px] font-bold text-emerald-700 hover:text-emerald-900 underline flex items-center gap-1"
-                >
-                  <Download className="w-3.5 h-3.5" />
-                  <span>Download PDF</span>
-                </a>
-              )}
-            </div>
-
-            <div className="p-3 rounded-xl bg-slate-50 border border-slate-100 font-semibold text-slate-800 leading-relaxed">
-              {dischargeReportText}
-            </div>
-          </div>
         </div>
       </div>
+
+      {/* Full-Width: Physician Consultation & Discharge Summary */}
+      {(parsedDischarge || (dischargeReportText && dischargeReportText !== "-") || dischargeReportUrl) && (
+        <div className="bg-white rounded-2xl border border-slate-200 shadow-xs p-6 space-y-4 text-xs">
+          <div className="flex items-center justify-between pb-3 border-b border-slate-100">
+            <div className="flex items-center gap-2">
+              <Stethoscope className="w-4 h-4 text-teal-700" />
+              <h3 className="text-sm font-bold text-slate-900 uppercase tracking-wide">
+                Discharge Summary &amp; Physician Advice
+              </h3>
+            </div>
+            {dischargeReportUrl && (
+              <a
+                href={dischargeReportUrl}
+                target="_blank"
+                rel="noopener noreferrer"
+                className="text-[11px] font-bold text-emerald-700 hover:text-emerald-900 bg-emerald-50 hover:bg-emerald-100 border border-emerald-200 px-3 py-1.5 rounded-lg flex items-center gap-1.5 transition-colors"
+              >
+                <Download className="w-3.5 h-3.5" />
+                <span>Download PDF</span>
+              </a>
+            )}
+          </div>
+
+          {parsedDischarge ? (
+            <div className="space-y-4">
+              {/* Condition at Discharge */}
+              {parsedDischarge.dischargeCondition && (
+                <div className="p-3.5 rounded-xl bg-emerald-50/80 border border-emerald-200">
+                  <div className="flex items-center gap-2 text-emerald-800 font-bold text-xs mb-1">
+                    <CheckCircle2 className="w-4 h-4 text-emerald-600 shrink-0" />
+                    <span>Condition at Discharge</span>
+                  </div>
+                  <p className="text-emerald-950 font-medium text-xs leading-relaxed pl-6">
+                    {parsedDischarge.dischargeCondition}
+                  </p>
+                </div>
+              )}
+
+              {/* Clinical Summary & Treatment Provided (Side-by-Side in 2 columns on md+) */}
+              {(parsedDischarge.clinicalSummary || parsedDischarge.treatmentProvided) && (
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                  {parsedDischarge.clinicalSummary && (
+                    <div className="space-y-1.5 flex flex-col">
+                      <div className="flex items-center gap-1.5 text-[11px] font-bold text-slate-700 uppercase tracking-wide">
+                        <FileText className="w-3.5 h-3.5 text-teal-600" />
+                        <span>Clinical Summary</span>
+                      </div>
+                      <div className="p-3.5 rounded-xl bg-slate-50 border border-slate-200 text-slate-800 leading-relaxed font-medium flex-1">
+                        {parsedDischarge.clinicalSummary}
+                      </div>
+                    </div>
+                  )}
+
+                  {parsedDischarge.treatmentProvided && (
+                    <div className="space-y-1.5 flex flex-col">
+                      <div className="flex items-center gap-1.5 text-[11px] font-bold text-slate-700 uppercase tracking-wide">
+                        <ShieldCheck className="w-3.5 h-3.5 text-teal-600" />
+                        <span>Treatment Provided &amp; In-Clinic Interventions</span>
+                      </div>
+                      <div className="p-3.5 rounded-xl bg-slate-50 border border-slate-200 text-slate-800 leading-relaxed font-medium flex-1">
+                        {parsedDischarge.treatmentProvided}
+                      </div>
+                    </div>
+                  )}
+                </div>
+              )}
+
+              {/* Prescribed Medications at Discharge */}
+              {Array.isArray(parsedDischarge.prescribedMedications) && parsedDischarge.prescribedMedications.length > 0 && (
+                <div className="space-y-2">
+                  <div className="flex items-center gap-1.5 text-[11px] font-bold text-slate-700 uppercase tracking-wide">
+                    <Pill className="w-3.5 h-3.5 text-teal-600" />
+                    <span>Prescribed Medications at Discharge</span>
+                  </div>
+
+                  <div className="overflow-x-auto rounded-xl border border-slate-200">
+                    <table className="w-full text-left text-xs border-collapse">
+                      <thead className="bg-slate-100/90 text-slate-600 font-bold uppercase text-[10px] tracking-wider border-b border-slate-200">
+                        <tr>
+                          <th className="py-2.5 px-3">Medication Name</th>
+                          <th className="py-2.5 px-3">Dosage</th>
+                          <th className="py-2.5 px-3">Frequency / Timing</th>
+                          <th className="py-2.5 px-3">Duration</th>
+                        </tr>
+                      </thead>
+                      <tbody className="divide-y divide-slate-100 bg-white">
+                        {parsedDischarge.prescribedMedications.map((med, idx) => (
+                          <tr key={idx} className="hover:bg-slate-50/50">
+                            <td className="py-2.5 px-3 font-bold text-slate-900">{med.name || "-"}</td>
+                            <td className="py-2.5 px-3">
+                              <span className="inline-block px-2 py-0.5 rounded text-[10px] font-bold bg-teal-50 text-teal-700 border border-teal-200">
+                                {med.dosage || "-"}
+                              </span>
+                            </td>
+                            <td className="py-2.5 px-3 text-slate-700">{med.frequency || "-"}</td>
+                            <td className="py-2.5 px-3 font-semibold text-emerald-800">{med.duration || "-"}</td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                </div>
+              )}
+
+              {/* Follow-Up Instructions */}
+              {parsedDischarge.followUpInstructions && (
+                <div className="space-y-2">
+                  <div className="flex items-center gap-1.5 text-[11px] font-bold text-slate-700 uppercase tracking-wide">
+                    <CalendarCheck className="w-3.5 h-3.5 text-teal-600" />
+                    <span>Follow-Up Instructions &amp; Advice</span>
+                  </div>
+
+                  {typeof parsedDischarge.followUpInstructions === "object" ? (
+                    <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+                      <div className="p-3.5 rounded-xl bg-slate-50 border border-slate-200 space-y-1">
+                        <span className="text-[10px] text-slate-400 font-bold uppercase block">Recommended Follow-Up</span>
+                        <p className="font-semibold text-slate-800 text-xs">
+                          {parsedDischarge.followUpInstructions.recommendedFollowUp || "-"}
+                        </p>
+                      </div>
+                      <div className="p-3.5 rounded-xl bg-slate-50 border border-slate-200 space-y-1">
+                        <span className="text-[10px] text-slate-400 font-bold uppercase block">Next Follow-Up Timeline</span>
+                        <p className="font-semibold text-teal-800 text-xs">
+                          {parsedDischarge.followUpInstructions.nextFollowUpDate || "-"}
+                        </p>
+                      </div>
+                      {parsedDischarge.followUpInstructions.lifestyleDietaryInstructions && (
+                        <div className="p-3.5 rounded-xl bg-slate-50 border border-slate-200 col-span-1 md:col-span-2 space-y-1">
+                          <span className="text-[10px] text-slate-400 font-bold uppercase block">Lifestyle &amp; Dietary Advice</span>
+                          <p className="font-medium text-slate-800 text-xs leading-relaxed">
+                            {parsedDischarge.followUpInstructions.lifestyleDietaryInstructions}
+                          </p>
+                        </div>
+                      )}
+                    </div>
+                  ) : (
+                    <div className="p-3.5 rounded-xl bg-slate-50 border border-slate-200 text-slate-800 leading-relaxed font-medium">
+                      {String(parsedDischarge.followUpInstructions)}
+                    </div>
+                  )}
+                </div>
+              )}
+            </div>
+          ) : dischargeReportText && dischargeReportText !== "-" ? (
+            <div className="p-3.5 rounded-xl bg-slate-50 border border-slate-100 font-medium text-slate-800 leading-relaxed">
+              {dischargeReportText}
+            </div>
+          ) : (
+            <div className="p-4 rounded-xl bg-slate-50 border border-slate-100 text-slate-400 text-center font-medium">
+              No physician discharge advice recorded for this case yet.
+            </div>
+          )}
+        </div>
+      )}
     </div>
   );
 }

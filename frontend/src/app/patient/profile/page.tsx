@@ -1,7 +1,8 @@
 "use client";
 
-import React, { useState, useEffect } from "react";
+import React, { useState, useEffect, useMemo } from "react";
 import Link from "next/link";
+import { getIndiaStates, getDistrictsForState, getBlocksForDistrict } from "@/lib/india-locations";
 import {
   ShieldCheck,
   CheckCircle2,
@@ -36,19 +37,56 @@ export default function PatientProfilePage() {
   const [editMode, setEditMode] = useState<boolean>(false);
   const [toastMessage, setToastMessage] = useState<string | null>(null);
 
-  // Form states initialized with live Supabase user data
-  const [fullName, setFullName] = useState<string>(user?.fullName || "Bikash Kumar Choudhury");
-  const [phone, setPhone] = useState<string>(user?.phone || "+91 8895140540");
-  const [email, setEmail] = useState<string>(user?.email || "kumarbikashchoudhury2004@gmail.com");
-  const [dob, setDob] = useState<string>(user?.dateOfBirth || "2006-01-01");
-  const [age, setAge] = useState<number | string>(user?.age || 20);
-  const [gender, setGender] = useState<string>(user?.gender || "Male");
-  const [bloodGroup, setBloodGroup] = useState<string>(user?.bloodGroup || "B+");
-  const [address, setAddress] = useState<string>(
-    user?.addressLine1
-      ? `${user.addressLine1}, ${user.city || ""}, ${user.district || ""}, ${user.state || ""} - ${user.postalCode || ""}`
-      : "Main Road, R.udayagiri, Gajapati, Odisha - 761016"
-  );
+  // Form states initialized with live user data
+  const [fullName, setFullName] = useState<string>(user?.fullName || "");
+  const [phone, setPhone] = useState<string>(user?.phone || "");
+  const [email, setEmail] = useState<string>(user?.email || "");
+  const [dob, setDob] = useState<string>(user?.dateOfBirth || "");
+  const [age, setAge] = useState<number | string>(user?.age || "");
+  const [gender, setGender] = useState<string>(user?.gender || "");
+  const [bloodGroup, setBloodGroup] = useState<string>(user?.bloodGroup || "");
+
+  const [addressLine1, setAddressLine1] = useState<string>(user?.addressLine1 || "");
+  const [state, setState] = useState<string>(user?.state || "");
+  const [district, setDistrict] = useState<string>(user?.district || "");
+  const [block, setBlock] = useState<string>(user?.block || "");
+  const [city, setCity] = useState<string>(user?.city || "");
+  const [postalCode, setPostalCode] = useState<string>(user?.postalCode || "");
+
+  // Sync form states whenever user object updates
+  useEffect(() => {
+    if (user) {
+      if (user.fullName) setFullName(user.fullName);
+      if (user.phone) setPhone(user.phone);
+      if (user.email) setEmail(user.email);
+      if (user.dateOfBirth) setDob(user.dateOfBirth);
+      if (user.age) setAge(user.age);
+      if (user.gender) setGender(user.gender);
+      if (user.bloodGroup) setBloodGroup(user.bloodGroup);
+      if (user.addressLine1) setAddressLine1(user.addressLine1);
+      if (user.state) setState(user.state);
+      if (user.district) setDistrict(user.district);
+      if (user.city) setCity(user.city);
+      if (user.block) setBlock(user.block);
+      if (user.postalCode) setPostalCode(user.postalCode);
+    }
+  }, [user]);
+
+  // Cascading location options for edit mode
+  const allStates = useMemo(() => getIndiaStates(), []);
+  const availableDistricts = useMemo(() => getDistrictsForState(state), [state]);
+  const availableBlocks = useMemo(() => getBlocksForDistrict(state, district), [state, district]);
+
+  const handleStateChange = (nextState: string) => {
+    setState(nextState);
+    setDistrict("");
+    setBlock("");
+  };
+
+  const handleDistrictChange = (nextDistrict: string) => {
+    setDistrict(nextDistrict);
+    setBlock("");
+  };
 
   // Dynamic lists connected to database
   const [chronicConditions, setChronicConditions] = useState<ChronicCondition[]>(user?.chronicConditions || []);
@@ -100,8 +138,37 @@ export default function PatientProfilePage() {
       if (user.age) setAge(user.age);
       if (user.gender) setGender(user.gender);
       if (user.bloodGroup) setBloodGroup(user.bloodGroup);
-      if (user.addressLine1) {
-        setAddress(`${user.addressLine1}, ${user.city || ""}, ${user.district || ""}, ${user.state || ""} - ${user.postalCode || ""}`);
+      if (user.addressLine1 || user.city || user.block || user.district || user.state || user.postalCode) {
+        let a1 = user.addressLine1 || "";
+        let b = user.block || "";
+        let c = user.city || "";
+        let d = user.district || "";
+        let s = user.state || "";
+        let p = user.postalCode || "";
+
+        if (a1 && (!b || !c || !d || !s || !p) && a1.includes(",")) {
+          const parts = a1.split(",").map((x: string) => x.trim());
+          if (parts.length >= 4) {
+            a1 = parts[0];
+            if (!c) c = parts[1];
+            if (!b) b = parts[1];
+            if (!d) d = parts[2];
+            const tail = parts.slice(3).join(", ");
+            if (tail.includes("-")) {
+              const [st, pin] = tail.split("-").map((x: string) => x.trim());
+              if (!s) s = st;
+              if (!p) p = pin;
+            } else if (!s) {
+              s = tail;
+            }
+          }
+        }
+        if (a1) setAddressLine1(a1);
+        if (b) setBlock(b);
+        if (c) setCity(c);
+        if (d) setDistrict(d);
+        if (s) setState(s);
+        if (p) setPostalCode(p);
       }
       if (user.chronicConditions) {
         setChronicConditions(user.chronicConditions);
@@ -172,7 +239,12 @@ export default function PatientProfilePage() {
       age: Number(age) || undefined,
       gender,
       bloodGroup,
-      addressLine1: address,
+      addressLine1,
+      block,
+      city,
+      district,
+      state,
+      postalCode,
       chronicConditions,
       allergies,
       dependents
@@ -284,8 +356,8 @@ export default function PatientProfilePage() {
     showNotification(`Unlinked dependent "${itemToDelete?.fullName || ''}" from database.`);
   };
 
-  const patientId = user?.patientUhid || "PAT-224052";
-  const userInitials = (fullName || "Bikash Kumar Choudhury")
+  const patientId = user?.patientUhid || user?.userId || "";
+  const userInitials = (fullName || user?.fullName || "PT")
     .trim()
     .split(/\s+/)
     .map((n) => n[0])
@@ -298,10 +370,6 @@ export default function PatientProfilePage() {
       {/* Title & Top Save Action Header */}
       <div className="flex flex-col md:flex-row md:items-center justify-between gap-4">
         <div>
-          <div className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full text-xs font-bold bg-emerald-50 text-emerald-800 border border-emerald-200 mb-2">
-            <CheckCircle2 className="w-3.5 h-3.5 text-emerald-600" />
-            <span>Verified Patient Profile</span>
-          </div>
           <h1 className="text-2xl sm:text-3xl font-black text-slate-900 tracking-tight">
             Patient Profile &amp; Clinical Health Records
           </h1>
@@ -481,20 +549,137 @@ export default function PatientProfilePage() {
             </div>
           </div>
 
-          {/* Permanent Address - Spans Full Width */}
-          <div className="space-y-1.5 pt-3 border-t border-slate-100 text-xs">
-            <label className="text-slate-700 font-bold">Residential Address</label>
+          {/* Residential Address - Separated into Street, Block, City, District, State & PIN */}
+          <div className="space-y-2 pt-3 border-t border-slate-100 text-xs">
+            <div className="flex items-center justify-between">
+              <label className="text-slate-700 font-bold">Residential Address</label>
+              <span className="text-[10px] text-slate-400 font-medium">Individual Demographic Attributes</span>
+            </div>
+
             {editMode ? (
-              <input
-                type="text"
-                value={address}
-                onChange={(e) => setAddress(e.target.value)}
-                placeholder="Street, City, District, State - PIN"
-                className="w-full h-11 px-3.5 bg-slate-50 border border-slate-300 rounded-xl text-slate-900 font-medium focus:bg-white focus:outline-teal-700 transition-colors"
-              />
+              <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-6 gap-3 pt-1">
+                <div className="sm:col-span-2">
+                  <label className="text-[10px] uppercase font-bold text-slate-500 block mb-1">Street / Line 1</label>
+                  <input
+                    type="text"
+                    value={addressLine1}
+                    onChange={(e) => setAddressLine1(e.target.value)}
+                    placeholder="Enter street / house / landmark"
+                    className="w-full h-11 px-3.5 bg-slate-50 border border-slate-300 rounded-xl text-slate-900 font-medium focus:bg-white focus:outline-teal-700 transition-colors"
+                  />
+                </div>
+
+                <div>
+                  <label className="text-[10px] uppercase font-bold text-slate-500 block mb-1">State</label>
+                  <select
+                    value={state}
+                    onChange={(e) => handleStateChange(e.target.value)}
+                    className="w-full h-11 px-3 bg-slate-50 border border-slate-300 rounded-xl text-slate-900 font-medium focus:bg-white focus:outline-teal-700 cursor-pointer transition-colors"
+                  >
+                    <option value="">Select State / UT</option>
+                    {allStates.map((st) => (
+                      <option key={st} value={st}>{st}</option>
+                    ))}
+                  </select>
+                </div>
+
+                <div>
+                  <label className="text-[10px] uppercase font-bold text-slate-500 block mb-1">District</label>
+                  {availableDistricts.length > 0 ? (
+                    <select
+                      value={district}
+                      onChange={(e) => handleDistrictChange(e.target.value)}
+                      className="w-full h-11 px-3 bg-slate-50 border border-slate-300 rounded-xl text-slate-900 font-medium focus:bg-white focus:outline-teal-700 cursor-pointer transition-colors"
+                    >
+                      <option value="">Select District</option>
+                      {availableDistricts.map((d) => (
+                        <option key={d} value={d}>{d}</option>
+                      ))}
+                    </select>
+                  ) : (
+                    <input
+                      type="text"
+                      value={district}
+                      onChange={(e) => handleDistrictChange(e.target.value)}
+                      placeholder="Enter district"
+                      className="w-full h-11 px-3.5 bg-slate-50 border border-slate-300 rounded-xl text-slate-900 font-medium focus:bg-white focus:outline-teal-700 transition-colors"
+                    />
+                  )}
+                </div>
+
+                <div>
+                  <label className="text-[10px] uppercase font-bold text-slate-500 block mb-1">Block</label>
+                  {availableBlocks.length > 0 ? (
+                    <select
+                      value={block}
+                      onChange={(e) => setBlock(e.target.value)}
+                      className="w-full h-11 px-3 bg-slate-50 border border-slate-300 rounded-xl text-slate-900 font-medium focus:bg-white focus:outline-teal-700 cursor-pointer transition-colors"
+                    >
+                      <option value="">Select Block</option>
+                      {availableBlocks.map((b) => (
+                        <option key={b} value={b}>{b}</option>
+                      ))}
+                    </select>
+                  ) : (
+                    <input
+                      type="text"
+                      value={block}
+                      onChange={(e) => setBlock(e.target.value)}
+                      placeholder="Enter block"
+                      className="w-full h-11 px-3.5 bg-slate-50 border border-slate-300 rounded-xl text-slate-900 font-medium focus:bg-white focus:outline-teal-700 transition-colors"
+                    />
+                  )}
+                </div>
+
+                <div>
+                  <label className="text-[10px] uppercase font-bold text-slate-500 block mb-1">City / Town</label>
+                  <input
+                    type="text"
+                    value={city}
+                    onChange={(e) => setCity(e.target.value)}
+                    placeholder="Enter city / town"
+                    className="w-full h-11 px-3.5 bg-slate-50 border border-slate-300 rounded-xl text-slate-900 font-medium focus:bg-white focus:outline-teal-700 transition-colors"
+                  />
+                </div>
+
+                <div>
+                  <label className="text-[10px] uppercase font-bold text-slate-500 block mb-1">PIN Code</label>
+                  <input
+                    type="text"
+                    maxLength={6}
+                    value={postalCode}
+                    onChange={(e) => setPostalCode(e.target.value.replace(/\D/g, "").slice(0, 6))}
+                    placeholder="6-digit PIN"
+                    className="w-full h-11 px-3.5 bg-slate-50 border border-slate-300 rounded-xl text-slate-900 font-mono font-medium focus:bg-white focus:outline-teal-700 transition-colors"
+                  />
+                </div>
+              </div>
             ) : (
-              <div className="p-3.5 bg-slate-50 rounded-xl border border-slate-200 text-slate-800 font-medium leading-relaxed">
-                {address}
+              <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-2.5 pt-1">
+                <div className="p-3 bg-slate-50 rounded-xl border border-slate-200">
+                  <span className="text-[10px] uppercase font-bold text-slate-400 block mb-0.5">Street / Line 1</span>
+                  <span className="text-xs font-semibold text-slate-900 block truncate" title={addressLine1}>{addressLine1 || "—"}</span>
+                </div>
+                <div className="p-3 bg-slate-50 rounded-xl border border-slate-200">
+                  <span className="text-[10px] uppercase font-bold text-slate-400 block mb-0.5">Block</span>
+                  <span className="text-xs font-semibold text-slate-900 block truncate" title={block}>{block || "—"}</span>
+                </div>
+                <div className="p-3 bg-slate-50 rounded-xl border border-slate-200">
+                  <span className="text-[10px] uppercase font-bold text-slate-400 block mb-0.5">City</span>
+                  <span className="text-xs font-semibold text-slate-900 block truncate" title={city}>{city || "—"}</span>
+                </div>
+                <div className="p-3 bg-slate-50 rounded-xl border border-slate-200">
+                  <span className="text-[10px] uppercase font-bold text-slate-400 block mb-0.5">District</span>
+                  <span className="text-xs font-semibold text-slate-900 block truncate" title={district}>{district || "—"}</span>
+                </div>
+                <div className="p-3 bg-slate-50 rounded-xl border border-slate-200">
+                  <span className="text-[10px] uppercase font-bold text-slate-400 block mb-0.5">State</span>
+                  <span className="text-xs font-semibold text-slate-900 block truncate" title={state}>{state || "—"}</span>
+                </div>
+                <div className="p-3 bg-slate-50 rounded-xl border border-slate-200">
+                  <span className="text-[10px] uppercase font-bold text-slate-400 block mb-0.5">PIN Code</span>
+                  <span className="text-xs font-semibold text-slate-900 font-mono block truncate" title={postalCode}>{postalCode || "—"}</span>
+                </div>
               </div>
             )}
           </div>

@@ -18,6 +18,7 @@ import {
   Flame,
   Radio
 } from "lucide-react";
+import { useAuth } from "@/lib/auth-context";
 
 interface DoctorDashboardOverviewProps {
   cases: CaseDetails[];
@@ -32,6 +33,7 @@ export function DoctorDashboardOverview({
   onSelectCase,
   onNavigateTab,
 }: DoctorDashboardOverviewProps) {
+  const { user } = useAuth();
   // Compute emergency red cases (Immediate / Red)
   const redCases = cases.filter((c) => {
     const u = `${c.urgency} ${c.aiSuggestion?.priority || ""}`.toLowerCase();
@@ -56,15 +58,11 @@ export function DoctorDashboardOverview({
       {/* 1. Unboxed Header like Nurse / Patient page (no box) */}
       <div className="flex flex-col md:flex-row md:items-center justify-between gap-4">
         <div>
-          <div className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full text-xs font-bold bg-teal-50 text-teal-800 border border-teal-200/80 mb-2">
-            <span className="w-2 h-2 rounded-full bg-teal-600 animate-pulse" />
-            <span>Live Clinical Command &bull; District Emergency Station</span>
-          </div>
           <h1 className="text-2xl sm:text-3xl font-black text-slate-900 tracking-tight">
             Doctor Clinical Decision Hub
           </h1>
           <p className="text-xs sm:text-sm text-slate-600 mt-1 max-w-2xl leading-relaxed">
-            Attending Physician: <strong className="text-slate-900">Dr. Kavita Verma, MD</strong> &bull; Review nurse-verified triage submissions, escalate red-flag cases, and issue immediate clinical orders.
+            Attending Physician: <strong className="text-slate-900">{user?.fullName ? (user.fullName.toLowerCase().startsWith("dr") ? user.fullName : `Dr. ${user.fullName}`) : "Attending Medical Officer"}</strong> &bull; Review nurse-verified triage submissions, escalate red-flag cases, and issue immediate clinical orders.
           </p>
         </div>
 
@@ -239,16 +237,18 @@ export function DoctorDashboardOverview({
                 u.includes("red") ||
                 u.includes("emergency") ||
                 u.includes("critical");
-              const isLessUrgent =
+              const isYellow = !isRed && (
+                u.includes("yellow") ||
+                (u.includes("urgent") && !u.includes("less urgent")) ||
+                u.includes("priority 2") ||
+                u.includes("priority 3") ||
+                u.includes("moderate")
+              );
+              const isLessUrgent = !isRed && !isYellow && (
                 u.includes("less urgent") ||
                 u.includes("green") ||
                 u.includes("routine") ||
-                u.includes("low");
-              const isYellow = !isRed && !isLessUrgent && (
-                u.includes("urgent") ||
-                u.includes("yellow") ||
-                u.includes("priority") ||
-                u.includes("moderate")
+                u.split(/\s+/).includes("low")
               );
 
               const priorityLabel = isRed

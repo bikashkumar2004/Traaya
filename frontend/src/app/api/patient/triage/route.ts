@@ -161,11 +161,55 @@ export async function POST(req: Request) {
       : null;
 
     const validPatientId = resolvedPatientId;
-    const resolvedFacilityId = facility_id || medical_id;
-    const validFacilityId = isValidUuid(resolvedFacilityId) ? resolvedFacilityId : null;
+    const resolvedFacilityId =
+      facility_id ||
+      medical_id ||
+      (typeof present_address === "object" && present_address !== null ? (present_address as any).facility_id : null) ||
+      body.designated_facility_id;
+    let validFacilityId = isValidUuid(resolvedFacilityId) ? resolvedFacilityId : null;
+
+    let candidateFacilityName =
+      body.facility_name ||
+      body.facility ||
+      (typeof present_address === "object" && present_address !== null ? (present_address as any).facility_name : null) ||
+      "";
+
+    if (!validFacilityId && candidateFacilityName) {
+      const searchName = String(candidateFacilityName).trim();
+      const matched = await sql`
+        SELECT id FROM public.profiles
+        WHERE role IN ('facility', 'medical')
+          AND (full_name ILIKE ${'%' + searchName + '%'} OR id::text = ${searchName})
+        LIMIT 1
+      `;
+      if (matched.length > 0) {
+        validFacilityId = matched[0].id;
+      }
+    }
+
+    if (!validFacilityId && present_block) {
+      const blockMatch = await sql`
+        SELECT id FROM public.profiles
+        WHERE role IN ('facility', 'medical')
+          AND block ILIKE ${'%' + present_block + '%'}
+        LIMIT 1
+      `;
+      if (blockMatch.length > 0) {
+        validFacilityId = blockMatch[0].id;
+      }
+    }
+
     const validDoctorId = isValidUuid(doctor_id) ? doctor_id : null;
     const validNurseId = isValidUuid(nurse_id) ? nurse_id : null;
     const validTicketId = isValidUuid(ticket_id || body.id) ? (ticket_id || body.id) : null;
+
+    let validFacilityName = candidateFacilityName;
+    if (validFacilityId && !validFacilityName) {
+      const [facProf] = await sql`
+        SELECT full_name FROM public.profiles WHERE id = ${validFacilityId}::uuid LIMIT 1
+      `;
+      if (facProf?.full_name) validFacilityName = facProf.full_name;
+    }
 
     // Generate unique case number
     const caseNumber = `TR-${crypto.randomBytes(2).toString("hex").toUpperCase()}`;
@@ -236,11 +280,14 @@ export async function POST(req: Request) {
     };
 
     // Build structured present address object
-    const resolvedPresentAddress = present_address || {
-      state: present_state,
+    const resolvedPresentAddress = {
+      state: present_state || "",
       district: present_district || "Nayagarh",
-      block: present_block,
-      landmark: landmark,
+      block: present_block || "",
+      landmark: landmark || "",
+      facility_id: validFacilityId || null,
+      facility_name: validFacilityName || "",
+      ...(typeof present_address === "object" && present_address !== null ? present_address : {}),
     };
     const resolvedDistrict = present_district || resolvedPresentAddress.district || "Nayagarh";
 
@@ -374,6 +421,7 @@ export async function POST(req: Request) {
             uploaded_report_data = ${uploadedReportData ? sql.json(uploadedReportData) : sql`'{}'::jsonb`},
             uploaded_report_url = COALESCE(${uploadedReportUrl}, uploaded_report_url),
             priority = ${priority},
+            facility_id = COALESCE(${validFacilityId ? sql`${validFacilityId}::uuid` : null}, facility_id),
             status = ${status},
             updated_at = now()
           WHERE id = ${validTicketId}::uuid
@@ -484,7 +532,8 @@ export async function POST(req: Request) {
         present_state: present_state,
         present_block: present_block,
       },
-      assigned_facility: `PHC ${present_block} Emergency & Clinical Desk`,
+      assigned_facility: validFacilityName || (present_block ? `PHC ${present_block} Emergency & Clinical Desk` : "Designated Clinical Facility"),
+      facility_name: validFacilityName || null,
       estimated_review_mins: priority === "Red" ? "15-20" : priority === "Yellow" ? "30-45" : "60-90",
     });
   } catch (err: any) {
@@ -515,9 +564,19 @@ export async function GET(req: Request) {
   const sql = postgres(dbUrl, { max: 1 });
   try {
     if (patientId) {
+      let resolvedUuid = patientId;
+      if (!/^[0-9a-fA-F-]{36}$/.test(patientId)) {
+        const [pRow] = await sql`SELECT id FROM public.profiles WHERE user_id = ${patientId}::text LIMIT 1`;
+        if (pRow?.id) {
+          resolvedUuid = pRow.id;
+        } else {
+          return NextResponse.json({ success: true, tickets: [], count: 0 });
+        }
+      }
+
       const tickets = await sql`
         SELECT * FROM public.triage_tickets
-        WHERE patient_id = ${patientId}::uuid
+        WHERE patient_id = ${resolvedUuid}::uuid
         ORDER BY created_at DESC
       `;
       return NextResponse.json({ success: true, tickets, count: tickets.length });

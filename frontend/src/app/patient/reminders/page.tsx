@@ -54,6 +54,17 @@ export default function PatientRemindersPage() {
   const [isAddModalOpen, setIsAddModalOpen] = useState(false);
   const [syncing, setSyncing] = useState(false);
 
+  // Hydrate cached reminders from sessionStorage on mount (client-only)
+  useEffect(() => {
+    try {
+      const cached = sessionStorage.getItem("triage_cached_reminders");
+      if (cached) {
+        setReminders(JSON.parse(cached));
+        setLoading(false);
+      }
+    } catch {}
+  }, []);
+
   // Quick vitals logger state
   const [systolic, setSystolic] = useState("120");
   const [diastolic, setDiastolic] = useState("80");
@@ -77,11 +88,14 @@ export default function PatientRemindersPage() {
       return;
     }
     try {
-      setLoading(true);
       const res = await fetch(`/api/patient/reminders?patient_id=${user.id}`);
       if (res.ok) {
         const data = await res.json();
-        setReminders(data.reminders || []);
+        const incoming = data.reminders || [];
+        setReminders(incoming);
+        if (typeof window !== "undefined") {
+          sessionStorage.setItem("triage_cached_reminders", JSON.stringify(incoming));
+        }
       }
     } catch (err) {
       console.error("Error fetching reminders:", err);
@@ -239,10 +253,6 @@ export default function PatientRemindersPage() {
       {/* Title & Actions Header */}
       <div className="flex flex-col md:flex-row md:items-center justify-between gap-4">
         <div>
-          <div className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full text-xs font-bold bg-teal-50 text-teal-800 border border-teal-200/80 mb-2">
-            <ShieldCheck className="w-3 h-3 text-teal-600" />
-            <span>ABDM Connected Care Schedule</span>
-          </div>
           <h1 className="text-2xl sm:text-3xl font-black text-slate-900 tracking-tight">
             Reminders &amp; Care Follow-ups
           </h1>

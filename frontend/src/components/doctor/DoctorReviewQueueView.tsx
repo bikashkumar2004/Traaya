@@ -1,7 +1,9 @@
 "use client";
 
 import React, { useState, useEffect } from "react";
+import { useAuth } from "@/lib/auth-context";
 import { CaseDetails } from "@/components/nurse/CaseReviewWorkspace";
+import { fetchRegisteredFacilities, RegisteredFacilityOption } from "@/lib/nurse-api";
 import {
   Search,
   ArrowRight,
@@ -31,8 +33,18 @@ import {
   Mic,
   MicOff,
   PhoneOff,
-  Maximize2
+  Maximize2,
+  Eye,
+  Printer,
+  Download,
+  Languages,
+  Loader2,
+  Edit3,
+  Plus,
+  Trash2,
 } from "lucide-react";
+import { generateDischargePdf } from "@/lib/generateDischargePdf";
+import { DischargeReportPayload, DischargeReportMedication } from "@/app/api/doctor/generate-discharge/route";
 
 interface DoctorReviewQueueViewProps {
   cases: CaseDetails[];
@@ -40,63 +52,99 @@ interface DoctorReviewQueueViewProps {
     caseItem: CaseDetails,
     decision: string,
     notes: string,
-    prescription?: string
+    prescription?: string,
+    referralData?: { destination: string; facilityId?: string; transferReason: string }
   ) => void;
   selectedCase: CaseDetails | null;
   onSelectCase: (caseItem: CaseDetails | null) => void;
 }
 
-export function isForwardedByNurseOrDoctor(c: CaseDetails): boolean {
+export function isForwardedByNurseOrDoctor(
+  c: CaseDetails,
+  targetDoctorId?: string | null,
+  targetDoctorName?: string | null
+): boolean {
   if (!c) return false;
   const status = (c.status || "").toLowerCase().trim();
-  const notes = (c.quickNotes || "").toLowerCase().trim();
 
-  // Exclude non-forwarded intake/triage statuses
+  // Exclude under review, draft, reverted, or completed/resolved cases
   if (
+    status === "under review" ||
+    status.includes("under review") ||
     status === "awaiting nurse review" ||
     status === "draft" ||
     status === "registered" ||
-    status === "pending triage"
+    status === "pending triage" ||
+    status === "completed" ||
+    status === "resolved" ||
+    status === "completed history" ||
+    status === "verified" ||
+    status.includes("doctor completed") ||
+    status.includes("prescription ready") ||
+    status.includes("revert") ||
+    status.includes("awaiting patient")
   ) {
     return false;
   }
 
-  // Explicitly check for forwarded status by nurse or doctor
-  const hasForwardedStatus =
-    status.includes("forwarded by nurse") ||
-    status.includes("forwarded by doctor") ||
-    status.includes("forwarded by dr") ||
-    status.includes("forwarded to doctor") ||
-    status.includes("forwarded to mo") ||
-    status.includes("forwarded to medical officer") ||
-    status.startsWith("forwarded by") ||
-    status === "forwarded to doctor" ||
-    (status.includes("forward") &&
-      (status.includes("nurse") ||
-        status.includes("doctor") ||
-        status.includes("dr") ||
-        status.includes("mo")));
+  // Must have a doctorId or doctorName
+  if (!c.doctorId && !c.doctorName) {
+    return false;
+  }
 
-  const hasForwardedNotes =
-    notes.includes("forwarded by nurse") ||
-    notes.includes("forwarded by doctor") ||
-    notes.includes("forwarded by dr") ||
-    notes.includes("forwarded to doctor") ||
-    notes.includes("forwarding to on-duty") ||
-    notes.includes("forwarding to dr");
+  // If targetDoctorId or targetDoctorName is provided, must match that doctor
+  if (targetDoctorId || targetDoctorName) {
+    const cleanDocId = (targetDoctorId || "").trim().toLowerCase();
+    const cleanCaseDocId = (c.doctorId || "").trim().toLowerCase();
+    const cleanDocName = (targetDoctorName || "").trim().toLowerCase();
+    const cleanCaseDocName = (c.doctorName || "").trim().toLowerCase();
 
-  return hasForwardedStatus || hasForwardedNotes;
+    const matchesId = Boolean(cleanDocId && cleanCaseDocId && cleanDocId === cleanCaseDocId);
+    const matchesName = Boolean(
+      cleanDocName &&
+      cleanCaseDocName &&
+      (cleanDocName === cleanCaseDocName ||
+        cleanCaseDocName.includes(cleanDocName) ||
+        cleanDocName.includes(cleanCaseDocName))
+    );
+
+    if (!matchesId && !matchesName) {
+      return false;
+    }
+  }
+
+  // Show only scheduled cases
+  const isScheduled =
+    status === "scheduled" ||
+    status === "schedule" ||
+    status.includes("scheduled") ||
+    status.includes("schedule") ||
+    Boolean(c.scheduleTime);
+
+  return isScheduled;
 }
 
-function formatReviewStatus(status: string, nurseName?: string) {
-  if (status === "Forwarded to Doctor" || status.toLowerCase() === "forwarded to doctor") {
-    return `Forwarded by ${nurseName || "Nurse Priya S."}`;
+export function formatReviewStatus(status: string, nurseName?: string, scheduleTime?: string) {
+  const st = (status || "").toLowerCase().trim();
+  const name = nurseName || "Nurse Priya S.";
+
+  if (
+    st === "scheduled" ||
+    st.includes("scheduled") ||
+    status === "Forwarded to Doctor" ||
+    st === "forwarded to doctor" ||
+    st.includes("forwarded")
+  ) {
+    return `Forwarded by ${name}`;
   }
+
   return status;
 }
 
 function formatUrgencyLabel(urgency?: string, aiPriority?: string) {
   const combined = `${urgency || ""} ${aiPriority || ""}`.toLowerCase();
+
+  // 1. Red / Immediate Priority
   if (
     combined.includes("immediate") ||
     combined.includes("immidiate") ||
@@ -109,21 +157,13 @@ function formatUrgencyLabel(urgency?: string, aiPriority?: string) {
       badgeClass: "bg-rose-100 text-rose-800 border-rose-200",
     };
   }
+
+  // 2. Yellow / Urgent Priority (Checked before green so "yellow" is never misidentified as "low")
   if (
-    combined.includes("less urgent") ||
-    combined.includes("green") ||
-    combined.includes("routine") ||
-    combined.includes("low")
-  ) {
-    return {
-      label: "Less Urgent",
-      badgeClass: "bg-emerald-100 text-emerald-800 border-emerald-200",
-    };
-  }
-  if (
-    combined.includes("urgent") ||
     combined.includes("yellow") ||
-    combined.includes("priority") ||
+    (combined.includes("urgent") && !combined.includes("less urgent")) ||
+    combined.includes("priority 2") ||
+    combined.includes("priority 3") ||
     combined.includes("medium")
   ) {
     return {
@@ -131,9 +171,24 @@ function formatUrgencyLabel(urgency?: string, aiPriority?: string) {
       badgeClass: "bg-amber-100 text-amber-800 border-amber-200",
     };
   }
+
+  // 3. Green / Less Urgent Priority
+  if (
+    combined.includes("green") ||
+    combined.includes("less urgent") ||
+    combined.includes("routine") ||
+    combined.includes("non-urgent") ||
+    combined.split(/\s+/).includes("low")
+  ) {
+    return {
+      label: "Less Urgent",
+      badgeClass: "bg-emerald-100 text-emerald-800 border-emerald-200",
+    };
+  }
+
   return {
-    label: "Less Urgent",
-    badgeClass: "bg-emerald-100 text-emerald-800 border-emerald-200",
+    label: "Urgent",
+    badgeClass: "bg-amber-100 text-amber-800 border-amber-200",
   };
 }
 
@@ -143,26 +198,84 @@ export function DoctorReviewQueueView({
   selectedCase,
   onSelectCase,
 }: DoctorReviewQueueViewProps) {
+  const { user } = useAuth();
   // Queue list filtering
   const [filterPriority, setFilterPriority] = useState<string>("All");
   const [queueSearch, setQueueSearch] = useState<string>("");
 
   // Review Workspace state
   const [activeTab, setActiveTab] = useState<string>("Overview");
-  const [selectedAction, setSelectedAction] = useState<string>("Confirm Triage & Approve");
+  const [selectedAction, setSelectedAction] = useState<string>("Generate Report & Discharge");
   const [reviewNote, setReviewNote] = useState<string>("");
 
   // Dynamic Action Inputs
-  // 1. Confirm Triage: Hospital Checkup Timeline
-  const [checkupTimeline, setCheckupTimeline] = useState<string>("Within 24 Hours (Next Morning OPD)");
+  // 1. Generate Report & Discharge Dynamic Inputs
+  const [dischargeCondition, setDischargeCondition] = useState<string>("Recovered & Clinically Stable");
+  const [dischargeAdvice, setDischargeAdvice] = useState<string>("Take prescribed medication on schedule, maintain hydration, and rest. Return immediately if red-flag symptoms reappear.");
+  const [dischargeFollowUp, setDischargeFollowUp] = useState<string>("Routine follow-up in OPD after 5 days if required");
+  const [dischargeSlipPreviewOpen, setDischargeSlipPreviewOpen] = useState<boolean>(false);
 
-  // 2. Prescription: Medicine Name, Dose, Frequency
-  const [medName, setMedName] = useState<string>("Tab Paracetamol 500mg");
-  const [medDose, setMedDose] = useState<string>("500mg (1 Tablet)");
-  const [medFrequency, setMedFrequency] = useState<string>("TDS (3 times daily) x 3 days");
+  // Groq AI Clinical Discharge Workspace States
+  const [isGeneratingDischarge, setIsGeneratingDischarge] = useState<boolean>(false);
+  const [dischargeModalOpen, setDischargeModalOpen] = useState<boolean>(false);
+  const [dischargeReportData, setDischargeReportData] = useState<DischargeReportPayload | null>(null);
+  const [isEditingDischarge, setIsEditingDischarge] = useState<boolean>(false);
+  const [isSavingDischarge, setIsSavingDischarge] = useState<boolean>(false);
 
-  // 3. Refer Action: Medical Center to Refer
-  const [referralHospital, setReferralHospital] = useState<string>("District Hospital (DH) Nayagarh");
+  // 3. Refer Action: Medical Center to Refer strictly from database & Transfer Reason
+  const [availableFacilities, setAvailableFacilities] = useState<RegisteredFacilityOption[]>([]);
+  const [loadingFacilities, setLoadingFacilities] = useState<boolean>(true);
+  const [referralFacilityId, setReferralFacilityId] = useState<string>("");
+  const [referralHospital, setReferralHospital] = useState<string>("");
+  const [transferReason, setTransferReason] = useState<string>("");
+
+  // Fetch real registered facilities strictly from database
+  useEffect(() => {
+    let isMounted = true;
+    async function loadFacilities() {
+      setLoadingFacilities(true);
+      try {
+        const facs = await fetchRegisteredFacilities();
+        if (isMounted) {
+          setAvailableFacilities(facs);
+          if (facs.length > 0) {
+            const defaultFac =
+              (selectedCase?.referalFacilityId && facs.find((f) => f.id === selectedCase.referalFacilityId)) ||
+              (selectedCase?.referalFacility && facs.find((f) => f.name.toLowerCase().includes(selectedCase.referalFacility!.toLowerCase()))) ||
+              facs[0];
+            setReferralFacilityId(defaultFac.id);
+            setReferralHospital(defaultFac.name);
+          }
+        }
+      } catch (err) {
+        console.warn("[DoctorReviewQueue] Error loading facilities:", err);
+      } finally {
+        if (isMounted) setLoadingFacilities(false);
+      }
+    }
+    loadFacilities();
+    return () => {
+      isMounted = false;
+    };
+  }, [selectedCase?.referalFacilityId, selectedCase?.referalFacility]);
+
+  // Reset discharge and referral data when selectedCase changes
+  useEffect(() => {
+    setDischargeReportData(null);
+    setIsEditingDischarge(false);
+    setTransferReason(selectedCase?.transferReason || "");
+    if (selectedCase?.referalFacilityId) {
+      setReferralFacilityId(selectedCase.referalFacilityId);
+      const match = availableFacilities.find((f) => f.id === selectedCase.referalFacilityId);
+      if (match) setReferralHospital(match.name);
+    } else if (selectedCase?.referalFacility) {
+      const match = availableFacilities.find((f) => f.name.toLowerCase().includes(selectedCase.referalFacility!.toLowerCase()));
+      if (match) {
+        setReferralFacilityId(match.id);
+        setReferralHospital(match.name);
+      }
+    }
+  }, [selectedCase?.id, selectedCase?.transferReason, selectedCase?.referalFacilityId, selectedCase?.referalFacility, availableFacilities]);
 
   // 4. Teleconsultation Video Call States
   const [videoCallModalOpen, setVideoCallModalOpen] = useState<boolean>(false);
@@ -203,30 +316,15 @@ export function DoctorReviewQueueView({
     "Activity Log",
   ];
 
+  // Clinical Actions: Merged e-Prescription & Discharge into unified NABH Discharge Report
   const actionOptions = [
     {
-      id: "Confirm Triage & Approve",
-      label: "Confirm Triage & Approve",
-      desc: "Authorize triage and clear patient for outpatient care",
-      icon: CheckCircle2,
+      id: "Generate Report & Discharge",
+      label: "Generate Report & Discharge",
+      desc: "Compile official clinical discharge report and release patient",
+      icon: FileText,
       color: "emerald",
-      targetStatus: "Under Review",
-    },
-    {
-      id: "Issue e-Prescription & Discharge",
-      label: "Issue e-Prescription & Discharge",
-      desc: "Provide generic Rx and outpatient discharge instructions",
-      icon: Pill,
-      color: "teal",
       targetStatus: "Complete",
-    },
-    {
-      id: "Admit to Ward / Observation",
-      label: "Admit to Ward / Observation",
-      desc: "Assign observation bed or inpatient ward at CHC",
-      icon: Building2,
-      color: "sky",
-      targetStatus: "Under Review",
     },
     {
       id: "Refer",
@@ -246,6 +344,111 @@ export function DoctorReviewQueueView({
     },
   ];
 
+  // Groq API Discharge Summary Generation (gpt-oss-120b)
+  const handleGenerateDischargeReport = async () => {
+    if (!selectedCase) return;
+    setIsGeneratingDischarge(true);
+    try {
+      const res = await fetch("/api/doctor/generate-discharge", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          patientName: selectedCase.name,
+          age: selectedCase.age,
+          gender: selectedCase.gender,
+          patientId: selectedCase.patientId,
+          admissionDate: selectedCase.submittedTime || new Date().toLocaleDateString("en-IN"),
+          dischargeDate: new Date().toLocaleDateString("en-IN"),
+          modeOfAdmission:
+            selectedCase.consultationMode === "online"
+              ? "Teleconsultation / Online Triage"
+              : "Outpatient Clinical Triage / Walk-in",
+          chiefComplaint: selectedCase.chiefComplaint,
+          symptoms: selectedCase.aiInfo?.symptoms || [],
+          vitals: (selectedCase as any).vitals || {},
+          doctorNotes: reviewNote,
+          doctorName: "Dr. Kavita Verma, MD",
+        }),
+      });
+
+      if (!res.ok) {
+        throw new Error("Failed to generate discharge report");
+      }
+
+      const data = await res.json();
+      if (data.report) {
+        setDischargeReportData(data.report);
+        setDischargeCondition(data.report.dischargeCondition || "Recovered & Clinically Stable");
+        setDischargeFollowUp(data.report.followUpInstructions?.recommendedFollowUp || "Routine follow-up in OPD after 5 days if required");
+        setDischargeAdvice(data.report.followUpInstructions?.lifestyleDietaryInstructions || "");
+        setDischargeModalOpen(true);
+        setIsEditingDischarge(false);
+      }
+    } catch (err: any) {
+      console.error("[generateDischargeReport Error]", err);
+      alert("Unable to generate report right now. Please verify your network or API keys.");
+    } finally {
+      setIsGeneratingDischarge(false);
+    }
+  };
+
+  // Authorize & Save Verified Discharge Summary to Supabase Storage & DB
+  const handleSaveAndAuthorizeDischarge = async () => {
+    if (!selectedCase || !dischargeReportData) return;
+    setIsSavingDischarge(true);
+    try {
+      // 1. Generate standard 2-page NABH PDF
+      const pdfDoc = generateDischargePdf(dischargeReportData);
+      const pdfBase64 = pdfDoc.output("datauristring").split(",")[1];
+
+      // 2. Trigger browser download of PDF
+      pdfDoc.save(`${selectedCase.patientId || selectedCase.id}_Discharge_Summary.pdf`);
+
+      // 3. Save to Supabase Storage & Database
+      await fetch("/api/doctor/save-discharge", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          caseNumber: selectedCase.id,
+          ticketId: (selectedCase as any).ticketId || (selectedCase as any).dbId,
+          patientUhid: selectedCase.patientId,
+          patientName: selectedCase.name,
+          reportData: dischargeReportData,
+          pdfBase64,
+          doctorNotes: reviewNote || dischargeReportData.clinicalSummary,
+          doctorName: user?.fullName || dischargeReportData.physician.name,
+          doctorId: user?.id,
+        }),
+      });
+
+      // 4. Compile prescription line
+      const rxText = dischargeReportData.prescribedMedications
+        .map((m, i) => `${i + 1}. ${m.name} | ${m.dosage} | ${m.frequency} (${m.duration})`)
+        .join("\n");
+
+      setActionSuccessToast(
+        `Discharge authorized! PDF saved to storage & database for ${selectedCase.id}`
+      );
+      setDischargeModalOpen(false);
+
+      setTimeout(() => {
+        onAcceptCase(
+          selectedCase,
+          "Generate Report & Discharge",
+          dischargeReportData.clinicalSummary,
+          rxText
+        );
+        setActionSuccessToast(null);
+        onSelectCase(null);
+      }, 1000);
+    } catch (err: any) {
+      console.error("[saveDischarge Error]", err);
+      alert("Error saving discharge report. Please check connection.");
+    } finally {
+      setIsSavingDischarge(false);
+    }
+  };
+
   const handleSubmitReview = (e: React.FormEvent) => {
     e.preventDefault();
     if (!selectedCase) return;
@@ -256,35 +459,76 @@ export function DoctorReviewQueueView({
       return;
     }
 
+    if (selectedAction === "Generate Report & Discharge") {
+      if (!dischargeReportData) {
+        handleGenerateDischargeReport();
+        return;
+      }
+      setDischargeModalOpen(true);
+      return;
+    }
+
     let finalPrescription = "";
     let finalNotes = reviewNote.trim();
+    let referralData: { destination: string; facilityId?: string; transferReason: string } | undefined;
 
-    if (selectedAction === "Confirm Triage & Approve") {
+    if (selectedAction === "Refer" || selectedAction.startsWith("Refer")) {
+      const chosenFac = availableFacilities.find((f) => f.id === referralFacilityId);
+      const finalDest = chosenFac?.name || referralHospital || "Referral Medical Facility";
+      const finalFacId = referralFacilityId || chosenFac?.id;
+      referralData = {
+        destination: finalDest,
+        facilityId: finalFacId,
+        transferReason: transferReason.trim(),
+      };
+      const reasonPart = transferReason.trim() ? `\n[Transfer Reason]: ${transferReason.trim()}` : "";
       finalNotes = finalNotes
-        ? `${finalNotes}\n\n[Hospital Checkup Timeline]: ${checkupTimeline}`
-        : `[Hospital Checkup Timeline]: ${checkupTimeline}`;
-    } else if (selectedAction === "Issue e-Prescription & Discharge") {
-      finalPrescription = `1. ${medName} | Dose: ${medDose} | Frequency: ${medFrequency}`;
-      finalNotes = finalNotes
-        ? `${finalNotes}\n\n[Prescription Issued]: ${medName} (${medDose}, ${medFrequency})`
-        : `[Prescription Issued]: ${medName} (${medDose}, ${medFrequency})`;
-    } else if (selectedAction === "Refer" || selectedAction.startsWith("Refer")) {
-      finalNotes = finalNotes
-        ? `${finalNotes}\n\n[Referred Hospital/Facility]: ${referralHospital}`
-        : `[Referred Hospital/Facility]: ${referralHospital}`;
+        ? `${finalNotes}\n\n[Referred Hospital/Facility]: ${finalDest}${reasonPart}`
+        : `[Referred Hospital/Facility]: ${finalDest}${reasonPart}`;
     }
 
     setActionSuccessToast(`Clinical action "${selectedAction}" recorded successfully for ${selectedCase.id}`);
 
     setTimeout(() => {
-      onAcceptCase(selectedCase, selectedAction, finalNotes, finalPrescription);
+      onAcceptCase(selectedCase, selectedAction, finalNotes, finalPrescription, referralData);
       setActionSuccessToast(null);
       onSelectCase(null);
     }, 900);
   };
 
-  // Filter queue cases: show only cases forwarded by nurse or doctor
-  const forwardedCases = cases.filter(isForwardedByNurseOrDoctor);
+  // Filter queue cases: show only scheduled cases assigned to this doctor
+  let activeDocId = user?.id;
+  if (!activeDocId && typeof window !== "undefined") {
+    try {
+      const stored = localStorage.getItem("triageassist_user");
+      if (stored) {
+        const parsed = JSON.parse(stored);
+        activeDocId = parsed?.id || parsed?.userId;
+      }
+    } catch {}
+  }
+  let activeDocName = user?.fullName;
+  if (!activeDocName && typeof window !== "undefined") {
+    try {
+      const stored = localStorage.getItem("triageassist_user");
+      if (stored) {
+        const parsed = JSON.parse(stored);
+        activeDocName = parsed?.fullName || parsed?.name;
+      }
+    } catch {}
+  }
+  const forwardedCases = cases.filter((c) => isForwardedByNurseOrDoctor(c, activeDocId, activeDocName));
+
+  const totalCount = forwardedCases.length;
+  const redCount = forwardedCases.filter((c) => {
+    return formatUrgencyLabel(c.urgency, c.aiSuggestion?.priority).label === "Immediate";
+  }).length;
+  const yellowCount = forwardedCases.filter((c) => {
+    return formatUrgencyLabel(c.urgency, c.aiSuggestion?.priority).label === "Urgent";
+  }).length;
+  const greenCount = forwardedCases.filter((c) => {
+    return formatUrgencyLabel(c.urgency, c.aiSuggestion?.priority).label === "Less Urgent";
+  }).length;
 
   const filteredCases = forwardedCases.filter((c) => {
     const matchesSearch =
@@ -294,18 +538,13 @@ export function DoctorReviewQueueView({
       (c.name && c.name.toLowerCase().includes(queueSearch.toLowerCase()));
 
     let matchesPriority = true;
+    const priorityLabel = formatUrgencyLabel(c.urgency, c.aiSuggestion?.priority).label;
     if (filterPriority === "Immediate") {
-      const u = (c.urgency || "").toLowerCase();
-      matchesPriority = u.includes("immediate") || u.includes("red") || u.includes("emergency");
+      matchesPriority = priorityLabel === "Immediate";
     } else if (filterPriority === "Urgent") {
-      const u = (c.urgency || "").toLowerCase();
-      matchesPriority =
-        (u.includes("urgent") && !u.includes("less urgent")) ||
-        u.includes("yellow") ||
-        u.includes("priority");
+      matchesPriority = priorityLabel === "Urgent";
     } else if (filterPriority === "Less Urgent") {
-      const u = (c.urgency || "").toLowerCase();
-      matchesPriority = u.includes("less urgent") || u.includes("green") || u.includes("routine");
+      matchesPriority = priorityLabel === "Less Urgent";
     }
 
     return matchesSearch && matchesPriority;
@@ -351,8 +590,25 @@ export function DoctorReviewQueueView({
                 >
                   {formatUrgencyLabel(selectedCase.urgency, selectedCase.aiSuggestion?.priority).label}
                 </span>
-                <span className="px-2.5 py-0.5 rounded-full text-xs font-bold bg-amber-100 text-amber-800 border border-amber-200">
-                  {formatReviewStatus(selectedCase.status, selectedCase.nurseName)}
+                <span className="px-2.5 py-0.5 rounded-full text-xs font-bold bg-purple-50 text-purple-800 border border-purple-200 inline-flex items-center gap-1.5">
+                  <UserCheck className="w-3.5 h-3.5 text-purple-600" />
+                  <span>{formatReviewStatus(selectedCase.status, selectedCase.nurseName, selectedCase.scheduleTime)}</span>
+                </span>
+                <span className={`px-2.5 py-0.5 rounded-full text-xs font-bold border inline-flex items-center gap-1.5 ${
+                  selectedCase.consultationMode === "online"
+                    ? "bg-indigo-50 text-indigo-800 border-indigo-200"
+                    : "bg-blue-50 text-blue-800 border-blue-200"
+                }`}>
+                  {selectedCase.consultationMode === "online" ? (
+                    <Video className="w-3.5 h-3.5 text-indigo-600" />
+                  ) : (
+                    <Building2 className="w-3.5 h-3.5 text-blue-600" />
+                  )}
+                  <span>Mode: {selectedCase.consultationMode === "online" ? "Online Teleconsult" : "In-Person Walk-in"}</span>
+                </span>
+                <span className="px-2.5 py-0.5 rounded-full text-xs font-bold bg-teal-50 text-teal-800 border border-teal-200/80 inline-flex items-center gap-1.5">
+                  <Languages className="w-3.5 h-3.5 text-teal-600" />
+                  <span>Language: {selectedCase.language || "Odia"}</span>
                 </span>
               </div>
 
@@ -361,11 +617,9 @@ export function DoctorReviewQueueView({
                   Patient ID: {selectedCase.patientId}
                 </strong>
                 <span>&bull;</span>
-                <span>Name: {selectedCase.name}</span>
+                <span>Name: <strong className="text-slate-900 font-bold">{selectedCase.name}</strong></span>
                 <span>&bull;</span>
-                <span>Age: {selectedCase.age}</span>
-                <span>&bull;</span>
-                <span>{selectedCase.gender}</span>
+                <span>Age/Sex: <strong className="text-slate-800">{selectedCase.age} yrs / {selectedCase.gender}</strong></span>
                 <span>&bull;</span>
                 <span>Location: {selectedCase.location}</span>
               </div>
@@ -448,6 +702,12 @@ export function DoctorReviewQueueView({
                         <span className="text-slate-400">Language</span>
                         <span className="font-semibold text-slate-800">
                           {selectedCase.language}
+                        </span>
+                      </div>
+                      <div className="flex justify-between py-1 border-b border-slate-100">
+                        <span className="text-slate-400">Consultation Mode</span>
+                        <span className="font-semibold text-indigo-700 capitalize">
+                          {selectedCase.consultationMode === "online" ? "Online Teleconsult" : (selectedCase.consultationMode || "In-Person Walk-in")}
                         </span>
                       </div>
                     </div>
@@ -763,7 +1023,7 @@ export function DoctorReviewQueueView({
                   <div className="flex items-center gap-2.5">
                     <AlertTriangle className="w-4 h-4 text-amber-600 shrink-0" />
                     <span className="leading-snug">
-                      <strong>Teleconsultation Completed:</strong> Please select an action below (Confirm Triage, Prescription, or Refer) to record patient disposition.
+                      <strong>Teleconsultation Completed:</strong> Please select an action below (Generate Report &amp; Discharge, Prescription, or Refer) to record patient disposition.
                     </span>
                   </div>
                   <button
@@ -788,12 +1048,10 @@ export function DoctorReviewQueueView({
                     const isSelected = selectedAction === act.id;
 
                     let activeColors = "bg-teal-700 text-white border-teal-800 shadow-sm";
-                    if (act.id === "Confirm Triage & Approve") {
+                    if (act.id === "Generate Report & Discharge") {
                       activeColors = isSelected ? "bg-emerald-600 text-white border-emerald-700 shadow-sm" : "border-slate-200 hover:border-slate-300";
                     } else if (act.id === "Issue e-Prescription & Discharge") {
                       activeColors = isSelected ? "bg-teal-700 text-white border-teal-800 shadow-sm" : "border-slate-200 hover:border-slate-300";
-                    } else if (act.id === "Admit to Ward / Observation") {
-                      activeColors = isSelected ? "bg-sky-600 text-white border-sky-700 shadow-sm" : "border-slate-200 hover:border-slate-300";
                     } else if (act.id === "Refer" || act.id === "Refer to DH Nayagarh") {
                       activeColors = isSelected ? "bg-amber-600 text-white border-amber-700 shadow-sm" : "border-slate-200 hover:border-slate-300";
                     } else if (act.id === "Teleconsultation Video Call") {
@@ -841,127 +1099,90 @@ export function DoctorReviewQueueView({
                 </div>
               </div>
 
-              {/* ACTION-SPECIFIC DYNAMIC INPUTS */}
-              {/* 1. When Confirm Triage & Approve: Show Checkup Timeline Input */}
-              {selectedAction === "Confirm Triage & Approve" && (
-                <div className="p-4 bg-emerald-50/80 border border-emerald-200 rounded-2xl space-y-3 animate-in fade-in slide-in-from-top-2 duration-150">
-                  <div className="flex items-center gap-2 text-emerald-950 font-bold text-xs">
-                    <Clock className="w-4 h-4 text-emerald-700 shrink-0" />
-                    <span>Hospital Checkup Timeline</span>
+              {/* 1. When Generate Report & Discharge: Clean Groq AI Generator Card (No manual input fields) */}
+              {selectedAction === "Generate Report & Discharge" && (
+                <div className="p-4 bg-emerald-50/80 border border-emerald-200 rounded-2xl space-y-3.5 animate-in fade-in slide-in-from-top-2 duration-150">
+                  <div className="flex items-center justify-between gap-2 flex-wrap">
+                    <div className="flex items-center gap-2 text-emerald-950 font-bold text-xs">
+                      <FileText className="w-4 h-4 text-emerald-700 shrink-0" />
+                      <span>Official Clinical Discharge Summary &amp; Rx</span>
+                    </div>
                   </div>
+
                   <p className="text-[11px] text-emerald-900 leading-relaxed">
-                    Set the expected timeline for patient to report for in-person doctor checkup at the hospital.
+                    Generate NABH-standard discharge report and clinical prescription matching the official state hospital format.
                   </p>
 
-                  <div className="space-y-1.5">
-                    <label className="block text-[11px] font-bold text-slate-800">
-                      Timeline for Checkup Patient in Hospital
-                    </label>
-                    <input
-                      type="text"
-                      value={checkupTimeline}
-                      onChange={(e) => setCheckupTimeline(e.target.value)}
-                      placeholder="e.g. Within 2 hours, Today by 4:00 PM, Within 24 Hours..."
-                      className="w-full px-3 py-2 bg-white border border-emerald-300 focus:border-emerald-600 focus:ring-2 focus:ring-emerald-100 rounded-xl text-xs text-slate-800 font-medium outline-hidden transition-all"
-                    />
-                  </div>
-
-                  <div className="space-y-1">
-                    <span className="text-[10px] font-semibold text-emerald-950">Quick Presets:</span>
-                    <div className="flex items-center gap-1.5 flex-wrap">
-                      {[
-                        "Immediate (Within 1 hr)",
-                        "Today (Within 4 hrs)",
-                        "Within 24 Hours (Next Morning OPD)",
-                        "Within 48 Hours",
-                        "Within 1 Week",
-                      ].map((preset) => (
-                        <button
-                          key={preset}
-                          type="button"
-                          onClick={() => setCheckupTimeline(preset)}
-                          className={`px-2.5 py-1 text-[10px] rounded-lg font-bold border transition-colors cursor-pointer ${
-                            checkupTimeline === preset
-                              ? "bg-emerald-600 text-white border-emerald-700 shadow-2xs"
-                              : "bg-white text-emerald-900 border-emerald-200 hover:bg-emerald-100/70"
-                          }`}
-                        >
-                          {preset}
-                        </button>
-                      ))}
-                    </div>
-                  </div>
-                </div>
-              )}
-
-              {/* 2. When Issue e-Prescription & Discharge: Show 3 Inputs (Medicine Name, Dose, Frequency) */}
-              {selectedAction === "Issue e-Prescription & Discharge" && (
-                <div className="p-4 bg-teal-50/80 border border-teal-200 rounded-2xl space-y-3.5 animate-in fade-in slide-in-from-top-2 duration-150">
-                  <div className="flex items-center gap-2 text-teal-950 font-bold text-xs">
-                    <Pill className="w-4 h-4 text-teal-700 shrink-0" />
-                    <span>e-Prescription Medicine Formulation</span>
-                  </div>
-                  <p className="text-[11px] text-teal-900 leading-relaxed">
-                    Enter the medicine name, dosage, and frequency for generic dispensation.
-                  </p>
-
-                  <div className="space-y-2.5">
-                    {/* Input 1: Medicine Name */}
-                    <div>
-                      <label className="block text-[11px] font-bold text-slate-800 mb-1 flex items-center justify-between">
-                        <span>1. Medicine Name</span>
-                        <span className="text-[10px] font-semibold text-teal-700">Generic Formula</span>
-                      </label>
-                      <input
-                        type="text"
-                        value={medName}
-                        onChange={(e) => setMedName(e.target.value)}
-                        placeholder="e.g. Tab Paracetamol 500mg, Amoxicillin 500mg, ORS Solution..."
-                        className="w-full px-3 py-2 bg-white border border-teal-300 focus:border-teal-600 focus:ring-2 focus:ring-teal-100 rounded-xl text-xs text-slate-800 font-medium outline-hidden transition-all"
-                      />
-                    </div>
-
-                    {/* Input 2: Dose */}
-                    <div>
-                      <label className="block text-[11px] font-bold text-slate-800 mb-1 flex items-center justify-between">
-                        <span>2. Dose</span>
-                        <span className="text-[10px] font-semibold text-teal-700">Strength &amp; Unit</span>
-                      </label>
-                      <input
-                        type="text"
-                        value={medDose}
-                        onChange={(e) => setMedDose(e.target.value)}
-                        placeholder="e.g. 500mg (1 Tablet), 1 Packet in 1L water, 5ml syrup..."
-                        className="w-full px-3 py-2 bg-white border border-teal-300 focus:border-teal-600 focus:ring-2 focus:ring-teal-100 rounded-xl text-xs text-slate-800 font-medium outline-hidden transition-all"
-                      />
-                    </div>
-
-                    {/* Input 3: Frequency */}
-                    <div>
-                      <label className="block text-[11px] font-bold text-slate-800 mb-1 flex items-center justify-between">
-                        <span>3. Frequency</span>
-                        <span className="text-[10px] font-semibold text-teal-700">Schedule &amp; Duration</span>
-                      </label>
-                      <input
-                        type="text"
-                        value={medFrequency}
-                        onChange={(e) => setMedFrequency(e.target.value)}
-                        placeholder="e.g. TDS (3 times daily) x 3 days, BD (Twice daily), SOS..."
-                        className="w-full px-3 py-2 bg-white border border-teal-300 focus:border-teal-600 focus:ring-2 focus:ring-teal-100 rounded-xl text-xs text-slate-800 font-medium outline-hidden transition-all"
-                      />
-                      <div className="flex items-center gap-1.5 flex-wrap pt-1.5">
-                        {["OD (Once daily)", "BD (Twice daily)", "TDS (3x daily)", "QID (4x daily)", "SOS (As needed)"].map((freq) => (
+                  {/* Clean Generate Button as requested */}
+                  <div className="pt-1">
+                    {!dischargeReportData ? (
+                      <button
+                        type="button"
+                        disabled={isGeneratingDischarge}
+                        onClick={handleGenerateDischargeReport}
+                        className="w-full py-3 px-4 bg-emerald-600 hover:bg-emerald-700 disabled:bg-emerald-400 text-white rounded-xl text-xs font-black shadow-md hover:shadow-lg transition-all flex items-center justify-center gap-2 cursor-pointer group"
+                      >
+                        {isGeneratingDischarge ? (
+                          <>
+                            <Loader2 className="w-4 h-4 animate-spin text-white" />
+                            <span>Synthesizing Discharge Report...</span>
+                          </>
+                        ) : (
+                          <>
+                            <Sparkles className="w-4 h-4 text-emerald-200 group-hover:rotate-12 transition-transform" />
+                            <span>⚡ Generate AI Clinical Discharge Report</span>
+                          </>
+                        )}
+                      </button>
+                    ) : (
+                      <div className="space-y-2.5">
+                        <div className="p-3 bg-white border border-emerald-300 rounded-xl flex items-center justify-between gap-3 shadow-2xs">
+                          <div className="flex items-center gap-2 min-w-0">
+                            <CheckCircle2 className="w-4 h-4 text-emerald-600 shrink-0" />
+                            <div className="min-w-0">
+                              <div className="text-xs font-extrabold text-slate-800 truncate">
+                                Discharge Report Ready
+                              </div>
+                              <div className="text-[10px] text-slate-500 truncate">
+                                {dischargeReportData.prescribedMedications?.length || 0} Medications &bull; Ready for doctor verification
+                              </div>
+                            </div>
+                          </div>
                           <button
-                            key={freq}
                             type="button"
-                            onClick={() => setMedFrequency(`${freq} x 3 days`)}
-                            className="px-2 py-0.5 text-[10px] bg-white border border-teal-200 hover:bg-teal-100/70 text-teal-900 rounded-md font-semibold cursor-pointer"
+                            onClick={() => setDischargeModalOpen(true)}
+                            className="px-3 py-1.5 bg-emerald-600 hover:bg-emerald-700 text-white text-[11px] font-bold rounded-lg transition-colors cursor-pointer shrink-0 flex items-center gap-1.5 shadow-2xs"
                           >
-                            {freq}
+                            <Eye className="w-3.5 h-3.5" />
+                            <span>Verify &amp; Edit</span>
                           </button>
-                        ))}
+                        </div>
+
+                        <div className="flex items-center gap-2">
+                          <button
+                            type="button"
+                            disabled={isGeneratingDischarge}
+                            onClick={handleGenerateDischargeReport}
+                            className="flex-1 py-1.5 px-3 bg-white hover:bg-emerald-100 text-emerald-800 border border-emerald-300 rounded-lg text-[10px] font-bold transition-colors cursor-pointer text-center"
+                          >
+                            {isGeneratingDischarge ? "Regenerating..." : "🔄 Regenerate"}
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => {
+                              if (dischargeReportData) {
+                                const doc = generateDischargePdf(dischargeReportData);
+                                doc.save(`${selectedCase.patientId || selectedCase.id}_Discharge_Summary.pdf`);
+                              }
+                            }}
+                            className="py-1.5 px-3 bg-white hover:bg-emerald-100 text-emerald-800 border border-emerald-300 rounded-lg text-[10px] font-bold transition-colors cursor-pointer flex items-center gap-1"
+                          >
+                            <Download className="w-3 h-3" />
+                            <span>PDF</span>
+                          </button>
+                        </div>
                       </div>
-                    </div>
+                    )}
                   </div>
                 </div>
               )}
@@ -978,34 +1199,56 @@ export function DoctorReviewQueueView({
                   </p>
 
                   <div className="space-y-1.5">
-                    <label className="block text-[11px] font-bold text-slate-800">
-                      Destination Medical / Hospital
-                    </label>
+                    <div className="flex items-center justify-between">
+                      <label className="block text-[11px] font-bold text-slate-800">
+                        Destination Medical / Hospital
+                      </label>
+                      <span className="text-[10px] font-semibold text-amber-800 bg-amber-100 px-2 py-0.5 rounded-md">
+                        Database Verified Facilities
+                      </span>
+                    </div>
                     <select
-                      value={referralHospital}
-                      onChange={(e) => setReferralHospital(e.target.value)}
-                      className="w-full px-3 py-2 bg-white border border-amber-300 focus:border-amber-600 focus:ring-2 focus:ring-amber-100 rounded-xl text-xs text-slate-800 font-medium outline-hidden transition-all cursor-pointer"
+                      value={referralFacilityId || ""}
+                      onChange={(e) => {
+                        const val = e.target.value;
+                        setReferralFacilityId(val);
+                        const match = availableFacilities.find((f) => f.id === val);
+                        if (match) setReferralHospital(match.name);
+                      }}
+                      disabled={loadingFacilities}
+                      className="w-full px-3 py-2 bg-white border border-amber-300 focus:border-amber-600 focus:ring-2 focus:ring-amber-100 rounded-xl text-xs text-slate-800 font-medium outline-hidden transition-all cursor-pointer disabled:bg-slate-50 disabled:cursor-not-allowed"
                     >
-                      <option value="District Hospital (DH) Nayagarh">District Hospital (DH) Nayagarh</option>
-                      <option value="AIIMS Bhubaneswar (Tertiary Care Super Specialty)">AIIMS Bhubaneswar (Tertiary Care Super Specialty)</option>
-                      <option value="SCB Medical College & Hospital, Cuttack">SCB Medical College &amp; Hospital, Cuttack</option>
-                      <option value="Sub-Divisional Hospital (SDH) Banapur">Sub-Divisional Hospital (SDH) Banapur</option>
-                      <option value="Capital Hospital, Bhubaneswar">Capital Hospital, Bhubaneswar</option>
-                      <option value="CHC Daspalla Secondary Emergency Unit">CHC Daspalla Secondary Emergency Unit</option>
-                      <option value="Other Medical Facility">Other Medical Center / Hospital...</option>
+                      {loadingFacilities ? (
+                        <option value="">Loading facilities from database...</option>
+                      ) : availableFacilities.length > 0 ? (
+                        availableFacilities.map((fac) => {
+                          const locParts = [fac.block, fac.district, fac.state].filter(Boolean);
+                          const locText = locParts.length ? ` — ${locParts.join(", ")}` : "";
+                          return (
+                            <option key={fac.id} value={fac.id}>
+                              {fac.name}{locText}
+                            </option>
+                          );
+                        })
+                      ) : (
+                        <option value="" disabled>No registered facilities found in database</option>
+                      )}
                     </select>
                   </div>
 
-                  {referralHospital === "Other Medical Facility" && (
-                    <div>
-                      <input
-                        type="text"
-                        placeholder="Type custom medical center / hospital name..."
-                        onChange={(e) => setReferralHospital(e.target.value)}
-                        className="w-full px-3 py-2 bg-white border border-amber-300 focus:border-amber-600 focus:ring-2 focus:ring-amber-100 rounded-xl text-xs text-slate-800 font-medium outline-hidden transition-all"
-                      />
-                    </div>
-                  )}
+                  {/* Transfer Reason Field */}
+                  <div className="space-y-1.5 pt-1">
+                    <label className="block text-[11px] font-bold text-slate-800">
+                      Transfer Reason &amp; Clinical Justification
+                    </label>
+                    <textarea
+                      rows={3}
+                      value={transferReason}
+                      onChange={(e) => setTransferReason(e.target.value)}
+                      placeholder="e.g. Higher-level secondary care required, ICU bed needed, specialized cardiology/trauma evaluation..."
+                      className="w-full p-2.5 bg-white border border-amber-300 focus:border-amber-600 focus:ring-2 focus:ring-amber-100 rounded-xl text-xs text-slate-800 font-medium outline-hidden transition-all"
+                    />
+                  </div>
                 </div>
               )}
 
@@ -1047,7 +1290,7 @@ export function DoctorReviewQueueView({
                     <div className="space-y-0.5">
                       <span className="font-bold text-amber-950">Next Action Required:</span>
                       <p className="text-[11px] leading-relaxed">
-                        After concluding the live video call, an alert prompt will ask you to choose a definitive clinical disposition: <strong>Confirm Triage &amp; Approve</strong> (Under Review), <strong>Issue e-Prescription &amp; Discharge</strong> (Complete), or <strong>Refer</strong> (Referred).
+                        After concluding the live video call, an alert prompt will ask you to choose a definitive clinical disposition: <strong>Generate Report &amp; Discharge</strong> (Complete), <strong>Issue e-Prescription &amp; Discharge</strong> (Complete), or <strong>Refer</strong> (Referred).
                       </p>
                     </div>
                   </div>
@@ -1109,6 +1352,635 @@ export function DoctorReviewQueueView({
                 <FileText className="w-12 h-12 text-teal-700 mx-auto mb-2 opacity-80" />
                 <div className="font-bold text-slate-800">Diagnostic Laboratory Report Slip</div>
                 <div className="text-[11px] mt-1 text-slate-400">CBC Panel &bull; Patient {selectedCase.patientId}</div>
+              </div>
+            </div>
+          </div>
+        )}
+
+        {/* Official Hospital Discharge Summary Verification & Authorization Workspace Modal */}
+        {dischargeModalOpen && dischargeReportData && (
+          <div className="fixed inset-0 z-50 bg-black/75 backdrop-blur-xs flex items-center justify-center p-3 sm:p-5 overflow-y-auto">
+            <div className="bg-white rounded-3xl max-w-4xl w-full p-5 sm:p-7 space-y-6 shadow-2xl border border-slate-200 animate-in zoom-in-95 duration-150 my-6 max-h-[92vh] flex flex-col">
+              {/* Modal Sticky Header */}
+              <div className="flex items-center justify-between border-b border-slate-200 pb-4 shrink-0">
+                <div className="space-y-0.5">
+                  <div className="flex items-center gap-2">
+                    <span className="text-[11px] font-bold text-slate-500">
+                      Govt. of Odisha Health Department
+                    </span>
+                  </div>
+                  <h2 className="text-xl sm:text-2xl font-black text-slate-900 tracking-tight">
+                    Clinical Discharge Summary Verification
+                  </h2>
+                  <p className="text-xs text-slate-500">
+                    Review and verify all clinical findings, treatments, and prescriptions prior to authorizing patient discharge.
+                  </p>
+                </div>
+                <div className="flex items-center gap-2 shrink-0">
+                  {/* Mode Toggle: Preview vs Edit */}
+                  <button
+                    type="button"
+                    onClick={() => setIsEditingDischarge(!isEditingDischarge)}
+                    className={`px-3 py-1.5 rounded-xl text-xs font-bold flex items-center gap-1.5 transition-colors cursor-pointer border ${
+                      isEditingDischarge
+                        ? "bg-amber-500 text-white border-amber-600 shadow-xs"
+                        : "bg-slate-100 hover:bg-slate-200 text-slate-700 border-slate-300"
+                    }`}
+                  >
+                    <Edit3 className="w-3.5 h-3.5" />
+                    <span>{isEditingDischarge ? "Editing Report" : "Edit Report"}</span>
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setDischargeModalOpen(false)}
+                    className="p-2 rounded-xl text-slate-400 hover:text-slate-800 hover:bg-slate-100 transition-colors cursor-pointer"
+                  >
+                    <X className="w-5 h-5" />
+                  </button>
+                </div>
+              </div>
+
+              {/* Scrollable Document Container */}
+              <div className="overflow-y-auto pr-1 space-y-6 flex-1 text-slate-800 text-xs">
+                {/* 1. Document Format & Metadata Header */}
+                <div className="p-4 bg-slate-50 rounded-2xl border border-slate-200 space-y-3">
+                  <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 border-b border-slate-200 pb-2">
+                    <span className="font-extrabold text-sm text-slate-900">Hospital Discharge Summary Format</span>
+                    <span className="text-[11px] text-teal-800 font-semibold">Standard NABH / Odisha Health Template</span>
+                  </div>
+                  <div className="grid grid-cols-2 sm:grid-cols-4 gap-2 text-[11px]">
+                    <div className="bg-white p-2 rounded-lg border border-slate-200">
+                      <span className="text-[10px] text-slate-500 font-bold block">Document ID</span>
+                      <strong className="text-slate-900">{dischargeReportData.documentId}</strong>
+                    </div>
+                    <div className="bg-white p-2 rounded-lg border border-slate-200">
+                      <span className="text-[10px] text-slate-500 font-bold block">Document Version</span>
+                      <strong className="text-slate-900">{dischargeReportData.documentVersion}</strong>
+                    </div>
+                    <div className="bg-white p-2 rounded-lg border border-slate-200">
+                      <span className="text-[10px] text-slate-500 font-bold block">Document Category</span>
+                      <strong className="text-slate-900">{dischargeReportData.documentCategory}</strong>
+                    </div>
+                    <div className="bg-white p-2 rounded-lg border border-slate-200">
+                      <span className="text-[10px] text-slate-500 font-bold block">Issue Date</span>
+                      <strong className="text-slate-900">{dischargeReportData.issueDate}</strong>
+                    </div>
+                  </div>
+                  <p className="text-[11px] text-slate-500 italic leading-relaxed">
+                    This document serves as a standardized template for recording patient discharge information. It provides a structured format to capture essential details about a patient&apos;s hospital stay, treatment, and condition at the time of discharge.
+                  </p>
+                </div>
+
+                {/* 2. Hospital Identification */}
+                <div className="p-4 bg-teal-50/60 rounded-2xl border border-teal-200 flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+                  <div>
+                    <div className="text-base font-black text-teal-950">{dischargeReportData.hospitalName}</div>
+                    <div className="text-[11px] text-teal-900">{dischargeReportData.hospitalAddress}</div>
+                    <div className="text-[11px] text-teal-800 font-medium">{dischargeReportData.contactInfo}</div>
+                  </div>
+                  <div className="px-3 py-1 bg-white text-teal-900 border border-teal-300 rounded-xl text-[11px] font-bold shrink-0 self-start sm:self-center">
+                    Official Encounter Summary
+                  </div>
+                </div>
+
+                {/* 3. Patient Details Section */}
+                <div className="p-4 bg-white rounded-2xl border border-slate-200 shadow-2xs space-y-3">
+                  <div className="font-black text-slate-900 uppercase tracking-wide text-[11px] flex items-center justify-between border-b border-slate-100 pb-2">
+                    <span>Patient Details</span>
+                    <span className="text-[10px] text-slate-500 font-normal">Section 1</span>
+                  </div>
+                  <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3 text-xs">
+                    <div>
+                      <label className="text-[10px] font-bold text-slate-500 uppercase block mb-1">Name</label>
+                      {isEditingDischarge ? (
+                        <input
+                          type="text"
+                          value={dischargeReportData.patientDetails.name}
+                          onChange={(e) =>
+                            setDischargeReportData({
+                              ...dischargeReportData,
+                              patientDetails: { ...dischargeReportData.patientDetails, name: e.target.value },
+                            })
+                          }
+                          className="w-full px-2.5 py-1.5 border border-slate-300 rounded-lg text-xs font-semibold focus:border-teal-600 outline-hidden"
+                        />
+                      ) : (
+                        <strong className="text-slate-900 font-extrabold">{dischargeReportData.patientDetails.name}</strong>
+                      )}
+                    </div>
+                    <div>
+                      <label className="text-[10px] font-bold text-slate-500 uppercase block mb-1">Age / Sex</label>
+                      {isEditingDischarge ? (
+                        <input
+                          type="text"
+                          value={dischargeReportData.patientDetails.ageSex}
+                          onChange={(e) =>
+                            setDischargeReportData({
+                              ...dischargeReportData,
+                              patientDetails: { ...dischargeReportData.patientDetails, ageSex: e.target.value },
+                            })
+                          }
+                          className="w-full px-2.5 py-1.5 border border-slate-300 rounded-lg text-xs font-semibold focus:border-teal-600 outline-hidden"
+                        />
+                      ) : (
+                        <strong className="text-slate-900 font-semibold">{dischargeReportData.patientDetails.ageSex}</strong>
+                      )}
+                    </div>
+                    <div>
+                      <label className="text-[10px] font-bold text-slate-500 uppercase block mb-1">Patient ID / MRN</label>
+                      {isEditingDischarge ? (
+                        <input
+                          type="text"
+                          value={dischargeReportData.patientDetails.patientId}
+                          onChange={(e) =>
+                            setDischargeReportData({
+                              ...dischargeReportData,
+                              patientDetails: { ...dischargeReportData.patientDetails, patientId: e.target.value },
+                            })
+                          }
+                          className="w-full px-2.5 py-1.5 border border-slate-300 rounded-lg text-xs font-semibold focus:border-teal-600 outline-hidden"
+                        />
+                      ) : (
+                        <strong className="text-slate-900 font-mono font-bold">{dischargeReportData.patientDetails.patientId}</strong>
+                      )}
+                    </div>
+                    <div>
+                      <label className="text-[10px] font-bold text-slate-500 uppercase block mb-1">Date of Admission</label>
+                      {isEditingDischarge ? (
+                        <input
+                          type="text"
+                          value={dischargeReportData.patientDetails.dateOfAdmission}
+                          onChange={(e) =>
+                            setDischargeReportData({
+                              ...dischargeReportData,
+                              patientDetails: { ...dischargeReportData.patientDetails, dateOfAdmission: e.target.value },
+                            })
+                          }
+                          className="w-full px-2.5 py-1.5 border border-slate-300 rounded-lg text-xs font-semibold focus:border-teal-600 outline-hidden"
+                        />
+                      ) : (
+                        <span className="text-slate-800 font-medium">{dischargeReportData.patientDetails.dateOfAdmission}</span>
+                      )}
+                    </div>
+                    <div>
+                      <label className="text-[10px] font-bold text-slate-500 uppercase block mb-1">Date of Discharge</label>
+                      {isEditingDischarge ? (
+                        <input
+                          type="text"
+                          value={dischargeReportData.patientDetails.dateOfDischarge}
+                          onChange={(e) =>
+                            setDischargeReportData({
+                              ...dischargeReportData,
+                              patientDetails: { ...dischargeReportData.patientDetails, dateOfDischarge: e.target.value },
+                            })
+                          }
+                          className="w-full px-2.5 py-1.5 border border-slate-300 rounded-lg text-xs font-semibold focus:border-teal-600 outline-hidden"
+                        />
+                      ) : (
+                        <span className="text-slate-800 font-medium">{dischargeReportData.patientDetails.dateOfDischarge}</span>
+                      )}
+                    </div>
+                  </div>
+                </div>
+
+                {/* 4. Admission Details */}
+                <div className="p-4 bg-white rounded-2xl border border-slate-200 shadow-2xs space-y-3">
+                  <div className="font-black text-slate-900 uppercase tracking-wide text-[11px] flex items-center justify-between border-b border-slate-100 pb-2">
+                    <span>Admission Details</span>
+                    <span className="text-[10px] text-slate-500 font-normal">Section 2</span>
+                  </div>
+                  <div className="space-y-3">
+                    <div>
+                      <label className="text-[10px] font-bold text-slate-500 uppercase block mb-1">
+                        Reason for Admission / Presentation
+                      </label>
+                      {isEditingDischarge ? (
+                        <textarea
+                          rows={2}
+                          value={dischargeReportData.admissionDetails.reasonForAdmission}
+                          onChange={(e) =>
+                            setDischargeReportData({
+                              ...dischargeReportData,
+                              admissionDetails: { ...dischargeReportData.admissionDetails, reasonForAdmission: e.target.value },
+                            })
+                          }
+                          className="w-full px-2.5 py-1.5 border border-slate-300 rounded-lg text-xs font-medium focus:border-teal-600 outline-hidden"
+                        />
+                      ) : (
+                        <p className="text-slate-800 font-medium leading-relaxed">
+                          {dischargeReportData.admissionDetails.reasonForAdmission}
+                        </p>
+                      )}
+                    </div>
+                    <div>
+                      <label className="text-[10px] font-bold text-slate-500 uppercase block mb-1">Mode of Admission</label>
+                      {isEditingDischarge ? (
+                        <input
+                          type="text"
+                          value={dischargeReportData.admissionDetails.modeOfAdmission}
+                          onChange={(e) =>
+                            setDischargeReportData({
+                              ...dischargeReportData,
+                              admissionDetails: { ...dischargeReportData.admissionDetails, modeOfAdmission: e.target.value },
+                            })
+                          }
+                          className="w-full px-2.5 py-1.5 border border-slate-300 rounded-lg text-xs font-medium focus:border-teal-600 outline-hidden"
+                        />
+                      ) : (
+                        <span className="inline-flex px-2.5 py-1 rounded-md bg-slate-100 text-slate-800 font-bold text-[11px]">
+                          {dischargeReportData.admissionDetails.modeOfAdmission}
+                        </span>
+                      )}
+                    </div>
+                  </div>
+                </div>
+
+                {/* 5. Clinical Summary */}
+                <div className="p-4 bg-white rounded-2xl border border-slate-200 shadow-2xs space-y-2">
+                  <div className="font-black text-slate-900 uppercase tracking-wide text-[11px] flex items-center justify-between border-b border-slate-100 pb-2">
+                    <span>Clinical Summary &amp; Differential Diagnosis</span>
+                    <span className="text-[10px] text-slate-500 font-normal">Section 3</span>
+                  </div>
+                  {isEditingDischarge ? (
+                    <textarea
+                      rows={3}
+                      value={dischargeReportData.clinicalSummary}
+                      onChange={(e) =>
+                        setDischargeReportData({
+                          ...dischargeReportData,
+                          clinicalSummary: e.target.value,
+                        })
+                      }
+                      className="w-full p-2.5 border border-slate-300 rounded-xl text-xs font-medium focus:border-teal-600 outline-hidden"
+                    />
+                  ) : (
+                    <p className="text-slate-800 font-medium leading-relaxed whitespace-pre-line">
+                      {dischargeReportData.clinicalSummary}
+                    </p>
+                  )}
+                </div>
+
+                {/* 6. Treatment Provided */}
+                <div className="p-4 bg-white rounded-2xl border border-slate-200 shadow-2xs space-y-2">
+                  <div className="font-black text-slate-900 uppercase tracking-wide text-[11px] flex items-center justify-between border-b border-slate-100 pb-2">
+                    <span>Treatment Provided &amp; Investigations</span>
+                    <span className="text-[10px] text-slate-500 font-normal">Section 4</span>
+                  </div>
+                  {isEditingDischarge ? (
+                    <textarea
+                      rows={2}
+                      value={dischargeReportData.treatmentProvided}
+                      onChange={(e) =>
+                        setDischargeReportData({
+                          ...dischargeReportData,
+                          treatmentProvided: e.target.value,
+                        })
+                      }
+                      className="w-full p-2.5 border border-slate-300 rounded-xl text-xs font-medium focus:border-teal-600 outline-hidden"
+                    />
+                  ) : (
+                    <p className="text-slate-800 font-medium leading-relaxed">
+                      {dischargeReportData.treatmentProvided}
+                    </p>
+                  )}
+                </div>
+
+                {/* 7. Discharge Condition */}
+                <div className="p-4 bg-white rounded-2xl border border-slate-200 shadow-2xs space-y-2">
+                  <div className="font-black text-slate-900 uppercase tracking-wide text-[11px] flex items-center justify-between border-b border-slate-100 pb-2">
+                    <span>Condition on Discharge</span>
+                    <span className="text-[10px] text-slate-500 font-normal">Section 5</span>
+                  </div>
+                  {isEditingDischarge ? (
+                    <div className="space-y-2">
+                      <input
+                        type="text"
+                        value={dischargeReportData.dischargeCondition}
+                        onChange={(e) =>
+                          setDischargeReportData({
+                            ...dischargeReportData,
+                            dischargeCondition: e.target.value,
+                          })
+                        }
+                        className="w-full px-3 py-2 border border-slate-300 rounded-xl text-xs font-medium focus:border-teal-600 outline-hidden"
+                      />
+                      <div className="flex items-center gap-1.5 flex-wrap">
+                        {[
+                          "Recovered & Clinically Stable",
+                          "Symptomatically Relieved",
+                          "Afebrile & Ambulatory",
+                          "Mild Symptoms - Home Care",
+                        ].map((preset) => (
+                          <button
+                            key={preset}
+                            type="button"
+                            onClick={() =>
+                              setDischargeReportData({
+                                ...dischargeReportData,
+                                dischargeCondition: preset,
+                              })
+                            }
+                            className="px-2 py-0.5 text-[10px] bg-slate-100 hover:bg-slate-200 rounded-md font-semibold text-slate-700 cursor-pointer"
+                          >
+                            {preset}
+                          </button>
+                        ))}
+                      </div>
+                    </div>
+                  ) : (
+                    <div className="flex items-center gap-2">
+                      <span className="px-3 py-1 rounded-full text-[11px] font-extrabold bg-emerald-100 text-emerald-800 border border-emerald-300">
+                        {dischargeReportData.dischargeCondition}
+                      </span>
+                    </div>
+                  )}
+                </div>
+
+                {/* 8. Prescribed Medications at Discharge */}
+                <div className="p-4 bg-white rounded-2xl border border-slate-200 shadow-2xs space-y-3">
+                  <div className="font-black text-slate-900 uppercase tracking-wide text-[11px] flex items-center justify-between border-b border-slate-100 pb-2">
+                    <span>Prescribed Medications at Discharge</span>
+                    <span className="text-[10px] text-slate-500 font-normal">Section 6</span>
+                  </div>
+
+                  <div className="overflow-x-auto">
+                    <table className="w-full text-left text-xs border-collapse">
+                      <thead>
+                        <tr className="border-b border-slate-200 text-slate-500 font-bold text-[10px] uppercase bg-slate-50">
+                          <th className="p-2 w-8">#</th>
+                          <th className="p-2">Medication Name</th>
+                          <th className="p-2">Dosage</th>
+                          <th className="p-2">Frequency</th>
+                          <th className="p-2">Duration</th>
+                          {isEditingDischarge && <th className="p-2 w-10 text-center">Action</th>}
+                        </tr>
+                      </thead>
+                      <tbody className="divide-y divide-slate-100">
+                        {dischargeReportData.prescribedMedications.map((med, idx) => (
+                          <tr key={idx} className="hover:bg-slate-50/60">
+                            <td className="p-2 font-bold text-slate-500">{idx + 1}</td>
+                            <td className="p-2 font-bold text-slate-800">
+                              {isEditingDischarge ? (
+                                <input
+                                  type="text"
+                                  value={med.name}
+                                  onChange={(e) => {
+                                    const next = [...dischargeReportData.prescribedMedications];
+                                    next[idx].name = e.target.value;
+                                    setDischargeReportData({ ...dischargeReportData, prescribedMedications: next });
+                                  }}
+                                  className="w-full px-2 py-1 border border-slate-300 rounded-md text-xs font-semibold focus:border-teal-600 outline-hidden"
+                                />
+                              ) : (
+                                med.name
+                              )}
+                            </td>
+                            <td className="p-2 text-slate-700">
+                              {isEditingDischarge ? (
+                                <input
+                                  type="text"
+                                  value={med.dosage}
+                                  onChange={(e) => {
+                                    const next = [...dischargeReportData.prescribedMedications];
+                                    next[idx].dosage = e.target.value;
+                                    setDischargeReportData({ ...dischargeReportData, prescribedMedications: next });
+                                  }}
+                                  className="w-full px-2 py-1 border border-slate-300 rounded-md text-xs focus:border-teal-600 outline-hidden"
+                                />
+                              ) : (
+                                med.dosage
+                              )}
+                            </td>
+                            <td className="p-2 text-slate-700">
+                              {isEditingDischarge ? (
+                                <input
+                                  type="text"
+                                  value={med.frequency}
+                                  onChange={(e) => {
+                                    const next = [...dischargeReportData.prescribedMedications];
+                                    next[idx].frequency = e.target.value;
+                                    setDischargeReportData({ ...dischargeReportData, prescribedMedications: next });
+                                  }}
+                                  className="w-full px-2 py-1 border border-slate-300 rounded-md text-xs focus:border-teal-600 outline-hidden"
+                                />
+                              ) : (
+                                med.frequency
+                              )}
+                            </td>
+                            <td className="p-2 text-slate-700">
+                              {isEditingDischarge ? (
+                                <input
+                                  type="text"
+                                  value={med.duration}
+                                  onChange={(e) => {
+                                    const next = [...dischargeReportData.prescribedMedications];
+                                    next[idx].duration = e.target.value;
+                                    setDischargeReportData({ ...dischargeReportData, prescribedMedications: next });
+                                  }}
+                                  className="w-full px-2 py-1 border border-slate-300 rounded-md text-xs focus:border-teal-600 outline-hidden"
+                                />
+                              ) : (
+                                med.duration
+                              )}
+                            </td>
+                            {isEditingDischarge && (
+                              <td className="p-2 text-center">
+                                <button
+                                  type="button"
+                                  onClick={() => {
+                                    const next = dischargeReportData.prescribedMedications.filter((_, i) => i !== idx);
+                                    setDischargeReportData({ ...dischargeReportData, prescribedMedications: next });
+                                  }}
+                                  className="p-1 text-rose-600 hover:bg-rose-50 rounded-md transition-colors cursor-pointer"
+                                >
+                                  <Trash2 className="w-3.5 h-3.5" />
+                                </button>
+                              </td>
+                            )}
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+
+                  {isEditingDischarge && (
+                    <button
+                      type="button"
+                      onClick={() => {
+                        const next = [
+                          ...dischargeReportData.prescribedMedications,
+                          { name: "New Generic Medicine", dosage: "1 Tablet", frequency: "OD", duration: "3 days" },
+                        ];
+                        setDischargeReportData({ ...dischargeReportData, prescribedMedications: next });
+                      }}
+                      className="px-3 py-1.5 bg-teal-50 hover:bg-teal-100 text-teal-800 border border-teal-300 rounded-xl text-xs font-bold flex items-center gap-1.5 transition-colors cursor-pointer"
+                    >
+                      <Plus className="w-3.5 h-3.5" />
+                      <span>Add Medication</span>
+                    </button>
+                  )}
+                </div>
+
+                {/* 9. Follow-Up Instructions */}
+                <div className="p-4 bg-white rounded-2xl border border-slate-200 shadow-2xs space-y-3">
+                  <div className="font-black text-slate-900 uppercase tracking-wide text-[11px] flex items-center justify-between border-b border-slate-100 pb-2">
+                    <span>Follow-Up Instructions</span>
+                    <span className="text-[10px] text-slate-500 font-normal">Section 7</span>
+                  </div>
+                  <div className="space-y-3">
+                    <div>
+                      <label className="text-[10px] font-bold text-slate-500 uppercase block mb-1">
+                        1. Recommended Follow-Up
+                      </label>
+                      {isEditingDischarge ? (
+                        <input
+                          type="text"
+                          value={dischargeReportData.followUpInstructions.recommendedFollowUp}
+                          onChange={(e) =>
+                            setDischargeReportData({
+                              ...dischargeReportData,
+                              followUpInstructions: {
+                                ...dischargeReportData.followUpInstructions,
+                                recommendedFollowUp: e.target.value,
+                              },
+                            })
+                          }
+                          className="w-full px-2.5 py-1.5 border border-slate-300 rounded-lg text-xs font-medium focus:border-teal-600 outline-hidden"
+                        />
+                      ) : (
+                        <p className="text-slate-800 font-medium">
+                          {dischargeReportData.followUpInstructions.recommendedFollowUp}
+                        </p>
+                      )}
+                    </div>
+                    <div>
+                      <label className="text-[10px] font-bold text-slate-500 uppercase block mb-1">
+                        2. Next Follow-Up Date / Guidance
+                      </label>
+                      {isEditingDischarge ? (
+                        <input
+                          type="text"
+                          value={dischargeReportData.followUpInstructions.nextFollowUpDate}
+                          onChange={(e) =>
+                            setDischargeReportData({
+                              ...dischargeReportData,
+                              followUpInstructions: {
+                                ...dischargeReportData.followUpInstructions,
+                                nextFollowUpDate: e.target.value,
+                              },
+                            })
+                          }
+                          className="w-full px-2.5 py-1.5 border border-slate-300 rounded-lg text-xs font-medium focus:border-teal-600 outline-hidden"
+                        />
+                      ) : (
+                        <p className="text-slate-800 font-medium">
+                          {dischargeReportData.followUpInstructions.nextFollowUpDate}
+                        </p>
+                      )}
+                    </div>
+                    <div>
+                      <label className="text-[10px] font-bold text-slate-500 uppercase block mb-1">
+                        3. Lifestyle / Dietary Instructions
+                      </label>
+                      {isEditingDischarge ? (
+                        <textarea
+                          rows={2}
+                          value={dischargeReportData.followUpInstructions.lifestyleDietaryInstructions}
+                          onChange={(e) =>
+                            setDischargeReportData({
+                              ...dischargeReportData,
+                              followUpInstructions: {
+                                ...dischargeReportData.followUpInstructions,
+                                lifestyleDietaryInstructions: e.target.value,
+                              },
+                            })
+                          }
+                          className="w-full px-2.5 py-1.5 border border-slate-300 rounded-lg text-xs font-medium focus:border-teal-600 outline-hidden"
+                        />
+                      ) : (
+                        <p className="text-slate-800 font-medium leading-relaxed">
+                          {dischargeReportData.followUpInstructions.lifestyleDietaryInstructions}
+                        </p>
+                      )}
+                    </div>
+                  </div>
+                </div>
+
+                {/* 10. Signatures and Disclaimer */}
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                  {/* Doctor Signature Block */}
+                  <div className="p-4 bg-slate-50 rounded-2xl border border-slate-200 space-y-1.5">
+                    <div className="text-[10px] font-bold text-slate-500 uppercase">Physician Name &amp; Signature</div>
+                    <div className="font-extrabold text-slate-900">{dischargeReportData.physician.name}</div>
+                    <div className="text-[11px] text-slate-600">{dischargeReportData.physician.qualification} &bull; Reg: {dischargeReportData.physician.regNo}</div>
+                    <div className="pt-2 text-[10px] font-bold text-emerald-800 flex items-center gap-1">
+                      <CheckCircle2 className="w-3.5 h-3.5 text-emerald-600" />
+                      <span>Digitally Verified &amp; Authorized Physician</span>
+                    </div>
+                  </div>
+
+                  {/* Patient Acknowledgment */}
+                  <div className="p-4 bg-slate-50 rounded-2xl border border-slate-200 space-y-1.5">
+                    <div className="text-[10px] font-bold text-slate-500 uppercase">Patient Acknowledgment</div>
+                    <p className="text-[11px] text-slate-600 italic">
+                      &ldquo;I acknowledge that I have received and understood the above discharge summary and instructions.&rdquo;
+                    </p>
+                    <div className="pt-2 text-[10px] font-semibold text-slate-500">
+                      Patient / Guardian Signed on File &bull; Date: {dischargeReportData.patientDetails.dateOfDischarge}
+                    </div>
+                  </div>
+                </div>
+
+                {/* Disclaimer */}
+                <div className="p-3 bg-slate-100 rounded-xl text-[10px] text-slate-500 leading-relaxed border border-slate-200">
+                  <strong className="text-slate-700">Disclaimer: </strong>
+                  {dischargeReportData.disclaimer}
+                </div>
+              </div>
+
+              {/* Modal Sticky Bottom Action Bar */}
+              <div className="pt-4 border-t border-slate-200 flex flex-col sm:flex-row sm:items-center justify-between gap-3 shrink-0">
+                <div className="text-xs text-slate-500 flex items-center gap-2">
+                  <Lock className="w-3.5 h-3.5 text-emerald-700 shrink-0" />
+                  <span>
+                    Authorization will generate the NABH PDF, upload to Supabase storage, record in DB, and discharge patient.
+                  </span>
+                </div>
+
+                <div className="flex items-center gap-2 shrink-0">
+                  {/* Download PDF Preview */}
+                  <button
+                    type="button"
+                    onClick={() => {
+                      const doc = generateDischargePdf(dischargeReportData);
+                      doc.save(`${selectedCase.patientId || selectedCase.id}_Discharge_Summary.pdf`);
+                    }}
+                    className="px-4 py-2 bg-slate-100 hover:bg-slate-200 text-slate-800 font-bold text-xs rounded-xl flex items-center gap-1.5 transition-colors cursor-pointer border border-slate-300"
+                  >
+                    <Download className="w-3.5 h-3.5" />
+                    <span>Download PDF</span>
+                  </button>
+
+                  {/* Verify & Complete Discharge */}
+                  <button
+                    type="button"
+                    disabled={isSavingDischarge}
+                    onClick={handleSaveAndAuthorizeDischarge}
+                    className="px-5 py-2.5 bg-emerald-600 hover:bg-emerald-700 disabled:bg-emerald-400 text-white font-black text-xs rounded-xl shadow-md transition-all flex items-center gap-2 cursor-pointer"
+                  >
+                    {isSavingDischarge ? (
+                      <>
+                        <Loader2 className="w-4 h-4 animate-spin text-white" />
+                        <span>Saving PDF &amp; Completing Discharge...</span>
+                      </>
+                    ) : (
+                      <>
+                        <CheckCircle2 className="w-4 h-4 text-white" />
+                        <span>Verify &amp; Authorize Discharge</span>
+                      </>
+                    )}
+                  </button>
+                </div>
               </div>
             </div>
           </div>
@@ -1271,49 +2143,28 @@ export function DoctorReviewQueueView({
                 </p>
 
                 <div className="space-y-2.5">
-                  {/* Option 1: Confirm Triage & Approve */}
+                  {/* Option 1: Generate Report & Discharge */}
                   <button
                     type="button"
                     onClick={() => {
-                      setSelectedAction("Confirm Triage & Approve");
+                      setSelectedAction("Generate Report & Discharge");
                       setTeleconsultAlertOpen(false);
                     }}
                     className="w-full p-3.5 rounded-xl border border-emerald-300 bg-emerald-50 hover:bg-emerald-100 text-left flex items-center justify-between group transition-all cursor-pointer shadow-2xs"
                   >
                     <div className="flex items-center gap-3">
                       <div className="w-8 h-8 rounded-lg bg-emerald-600 text-white flex items-center justify-center shrink-0">
-                        <CheckCircle2 className="w-4 h-4" />
+                        <FileText className="w-4 h-4" />
                       </div>
                       <div>
-                        <div className="text-xs font-bold text-emerald-950">1. Confirm Triage &amp; Approve</div>
-                        <div className="text-[10px] text-emerald-800">Set hospital checkup timeline &bull; Status: Under Review</div>
+                        <div className="text-xs font-bold text-emerald-950">1. Generate Report &amp; Discharge</div>
+                        <div className="text-[10px] text-emerald-800">Compile official clinical report &bull; Status: Complete</div>
                       </div>
                     </div>
                     <ArrowRight className="w-4 h-4 text-emerald-700 group-hover:translate-x-1 transition-transform" />
                   </button>
 
-                  {/* Option 2: Issue e-Prescription & Discharge */}
-                  <button
-                    type="button"
-                    onClick={() => {
-                      setSelectedAction("Issue e-Prescription & Discharge");
-                      setTeleconsultAlertOpen(false);
-                    }}
-                    className="w-full p-3.5 rounded-xl border border-teal-300 bg-teal-50 hover:bg-teal-100 text-left flex items-center justify-between group transition-all cursor-pointer shadow-2xs"
-                  >
-                    <div className="flex items-center gap-3">
-                      <div className="w-8 h-8 rounded-lg bg-teal-700 text-white flex items-center justify-center shrink-0">
-                        <Pill className="w-4 h-4" />
-                      </div>
-                      <div>
-                        <div className="text-xs font-bold text-teal-950">2. Issue e-Prescription &amp; Discharge</div>
-                        <div className="text-[10px] text-teal-800">Write medicine, dose &amp; frequency &bull; Status: Complete</div>
-                      </div>
-                    </div>
-                    <ArrowRight className="w-4 h-4 text-teal-700 group-hover:translate-x-1 transition-transform" />
-                  </button>
-
-                  {/* Option 3: Refer */}
+                  {/* Option 2: Refer */}
                   <button
                     type="button"
                     onClick={() => {
@@ -1327,32 +2178,11 @@ export function DoctorReviewQueueView({
                         <ArrowRightLeft className="w-4 h-4" />
                       </div>
                       <div>
-                        <div className="text-xs font-bold text-amber-950">3. Refer</div>
+                        <div className="text-xs font-bold text-amber-950">2. Refer</div>
                         <div className="text-[10px] text-amber-800">Choose hospital to refer &bull; Status: Referred</div>
                       </div>
                     </div>
                     <ArrowRight className="w-4 h-4 text-amber-700 group-hover:translate-x-1 transition-transform" />
-                  </button>
-
-                  {/* Option 4: Admit to Ward */}
-                  <button
-                    type="button"
-                    onClick={() => {
-                      setSelectedAction("Admit to Ward / Observation");
-                      setTeleconsultAlertOpen(false);
-                    }}
-                    className="w-full p-3 rounded-xl border border-sky-200 bg-sky-50/70 hover:bg-sky-100 text-left flex items-center justify-between group transition-all cursor-pointer"
-                  >
-                    <div className="flex items-center gap-3">
-                      <div className="w-7 h-7 rounded-lg bg-sky-600 text-white flex items-center justify-center shrink-0">
-                        <Building2 className="w-3.5 h-3.5" />
-                      </div>
-                      <div>
-                        <div className="text-xs font-bold text-sky-950">4. Admit to Ward / Observation</div>
-                        <div className="text-[10px] text-sky-800">Assign inpatient bed &bull; Status: Under Review</div>
-                      </div>
-                    </div>
-                    <ArrowRight className="w-3.5 h-3.5 text-sky-700 group-hover:translate-x-0.5 transition-transform" />
                   </button>
                 </div>
               </div>
@@ -1371,16 +2201,87 @@ export function DoctorReviewQueueView({
       {/* Queue Header like Patient & Nurse page (no box) */}
       <div className="flex flex-col md:flex-row md:items-center justify-between gap-4">
         <div>
-          <div className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full text-xs font-bold bg-teal-50 text-teal-800 border border-teal-200/80 mb-2">
-            <span className="w-2 h-2 rounded-full bg-teal-600 animate-pulse" />
-            <span>Active Triage Queue &bull; CHC Khandapada</span>
-          </div>
           <h1 className="text-2xl sm:text-3xl font-black text-slate-900 tracking-tight">
             Incoming Review Queue ({filteredCases.length})
           </h1>
           <p className="text-xs sm:text-sm text-slate-600 mt-1 max-w-2xl leading-relaxed">
             Review patient cases forwarded by nursing staff or attending doctors for clinical authorization.
           </p>
+        </div>
+      </div>
+
+      {/* Priority Metric Cards Grid (Matching requested design) */}
+      <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
+        {/* Total In Queue Card */}
+        <div
+          onClick={() => setFilterPriority("All")}
+          className={`bg-white p-5 rounded-2xl border transition-all cursor-pointer shadow-xs ${
+            filterPriority === "All"
+              ? "border-slate-900 ring-2 ring-slate-200"
+              : "border-slate-200 hover:border-slate-300 hover:shadow-sm"
+          }`}
+        >
+          <span className="text-xs text-slate-500 font-medium">Scheduled Queue</span>
+          <div className="text-2xl sm:text-3xl font-black text-slate-900 mt-1.5 tabular-nums">
+            {totalCount}
+          </div>
+          <div className="text-[11px] text-teal-700 font-medium mt-1">
+            Scheduled for consultation
+          </div>
+        </div>
+
+        {/* Red Priority Card */}
+        <div
+          onClick={() => setFilterPriority(filterPriority === "Immediate" ? "All" : "Immediate")}
+          className={`bg-white p-5 rounded-2xl border transition-all cursor-pointer shadow-xs ${
+            filterPriority === "Immediate"
+              ? "border-rose-500 ring-2 ring-rose-100"
+              : "border-slate-200 hover:border-rose-300 hover:shadow-sm"
+          }`}
+        >
+          <span className="text-xs text-slate-500 font-medium">Red Priority</span>
+          <div className="text-2xl sm:text-3xl font-black text-rose-700 mt-1.5 tabular-nums">
+            {redCount}
+          </div>
+          <div className="text-[11px] text-rose-600 font-medium mt-1">
+            Immediate attention needed
+          </div>
+        </div>
+
+        {/* Yellow Priority Card */}
+        <div
+          onClick={() => setFilterPriority(filterPriority === "Urgent" ? "All" : "Urgent")}
+          className={`bg-white p-5 rounded-2xl border transition-all cursor-pointer shadow-xs ${
+            filterPriority === "Urgent"
+              ? "border-amber-500 ring-2 ring-amber-100"
+              : "border-slate-200 hover:border-amber-300 hover:shadow-sm"
+          }`}
+        >
+          <span className="text-xs text-slate-500 font-medium">Yellow Priority</span>
+          <div className="text-2xl sm:text-3xl font-black text-amber-700 mt-1.5 tabular-nums">
+            {yellowCount}
+          </div>
+          <div className="text-[11px] text-amber-700 font-medium mt-1">
+            Urgent clinical review
+          </div>
+        </div>
+
+        {/* Green Priority Card */}
+        <div
+          onClick={() => setFilterPriority(filterPriority === "Less Urgent" ? "All" : "Less Urgent")}
+          className={`bg-white p-5 rounded-2xl border transition-all cursor-pointer shadow-xs ${
+            filterPriority === "Less Urgent"
+              ? "border-emerald-500 ring-2 ring-emerald-100"
+              : "border-slate-200 hover:border-emerald-300 hover:shadow-sm"
+          }`}
+        >
+          <span className="text-xs text-slate-500 font-medium">Green Priority</span>
+          <div className="text-2xl sm:text-3xl font-black text-emerald-800 mt-1.5 tabular-nums">
+            {greenCount}
+          </div>
+          <div className="text-[11px] text-emerald-700 font-medium mt-1">
+            Routine &bull; Stable condition
+          </div>
         </div>
       </div>
 
@@ -1441,8 +2342,42 @@ export function DoctorReviewQueueView({
                 >
                   {formatUrgencyLabel(item.urgency, item.aiSuggestion?.priority).label}
                 </span>
-                <span className="px-2 py-0.5 rounded-md text-[10px] font-semibold bg-slate-100 text-slate-600">
-                  {formatReviewStatus(item.status, item.nurseName)}
+                <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-md text-[10px] font-bold bg-purple-50 text-purple-800 border border-purple-200">
+                  <UserCheck className="w-3 h-3 text-purple-600" />
+                  <span>{formatReviewStatus(item.status, item.nurseName, item.scheduleTime)}</span>
+                </span>
+                {item.scheduleTime && (
+                  <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-md text-[10px] font-bold bg-teal-50 text-teal-800 border border-teal-200">
+                    <Clock className="w-3 h-3 text-teal-600" />
+                    <span>
+                      {(() => {
+                        try {
+                          const d = new Date(item.scheduleTime);
+                          return `Slot: ${d.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}`;
+                        } catch {
+                          return "Scheduled";
+                        }
+                      })()}
+                    </span>
+                  </span>
+                )}
+                {/* Consultation Mode Badge */}
+                <span className={`inline-flex items-center gap-1 px-2 py-0.5 rounded-md text-[10px] font-bold border ${
+                  item.consultationMode === "online"
+                    ? "bg-indigo-50 text-indigo-800 border-indigo-200"
+                    : "bg-blue-50 text-blue-800 border-blue-200"
+                }`}>
+                  {item.consultationMode === "online" ? (
+                    <Video className="w-3 h-3 text-indigo-600" />
+                  ) : (
+                    <Building2 className="w-3 h-3 text-blue-600" />
+                  )}
+                  <span>{item.consultationMode === "online" ? "Online Teleconsult" : "In-Person Walk-in"}</span>
+                </span>
+                {/* Preferred Language Badge */}
+                <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-md text-[10px] font-bold bg-teal-50 text-teal-800 border border-teal-200/80">
+                  <Languages className="w-3 h-3 text-teal-600" />
+                  <span>{item.language || "Odia"}</span>
                 </span>
               </div>
 
@@ -1451,8 +2386,12 @@ export function DoctorReviewQueueView({
                   Patient ID: {item.patientId}
                 </span>
                 <span>&bull;</span>
+                <span className="font-medium text-slate-700">
+                  Name: {item.name}
+                </span>
+                <span>&bull;</span>
                 <span className="text-slate-500">
-                  Submitted: {item.submittedTime}
+                  {item.age} yrs &bull; {item.gender}
                 </span>
                 <span>&bull;</span>
                 <span className="text-slate-500">
@@ -1462,6 +2401,10 @@ export function DoctorReviewQueueView({
 
               <p className="text-xs text-slate-600 line-clamp-1 italic max-w-2xl pt-0.5">
                 &ldquo;{item.chiefComplaint}&rdquo;
+              </p>
+
+              <p className="text-xs text-slate-500">
+                Submitted: {item.submittedTime}
               </p>
             </div>
 

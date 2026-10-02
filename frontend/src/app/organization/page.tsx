@@ -311,10 +311,6 @@ export default function OrganizationPortalPage() {
           <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-6">
             <div className="space-y-1.5">
               <div className="flex items-center gap-2 flex-wrap">
-                <div className="inline-flex items-center gap-2 px-3 py-1 rounded-full text-xs font-bold bg-teal-50 text-teal-800 border border-teal-200">
-                  <ShieldCheck className="w-3.5 h-3.5" />
-                  <span>Empanelled Occupational Health &bull; {selectedOrg.type}</span>
-                </div>
                 <span className="text-xs font-mono font-bold text-slate-500 bg-slate-100 px-2.5 py-0.5 rounded-lg border border-slate-200">
                   ORG CODE: {selectedOrg.code}
                 </span>

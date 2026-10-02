@@ -15,7 +15,10 @@ import {
   Sparkles,
   Flame,
   AlertCircle,
-  CheckCircle2
+  CheckCircle2,
+  Video,
+  Languages,
+  RotateCcw,
 } from "lucide-react";
 
 interface TriageQueueViewProps {
@@ -87,10 +90,6 @@ export function TriageQueueView({
       {/* Queue Header like Patient page (no box) */}
       <div className="flex flex-col md:flex-row md:items-center justify-between gap-4">
         <div>
-          <div className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full text-xs font-bold bg-teal-50 text-teal-800 border border-teal-200/80 mb-2">
-            <span className="w-2 h-2 rounded-full bg-teal-600 animate-pulse" />
-            <span>Active Triage Queue &bull; CHC Khandapada</span>
-          </div>
           <h1 className="text-2xl sm:text-3xl font-black text-slate-900 tracking-tight">
             Incoming Patient Queue ({filteredCases.length})
           </h1>
@@ -231,7 +230,7 @@ export function TriageQueueView({
             key={item.id}
             className="bg-white rounded-2xl border border-slate-200 p-5 shadow-xs hover:border-teal-300 hover:shadow-md transition-all flex flex-col md:flex-row md:items-center justify-between gap-4"
           >
-            {/* Left Info: Case ID, Priority badge only (no status badge), Patient ID, Submitted, Location, Chief Complaint */}
+            {/* Left Info: Case ID, Priority badge, Mode, Language, Patient ID, Name, Age/Gender, Location, Chief Complaint, Submitted */}
             <div className="space-y-1.5 min-w-0">
               <div className="flex items-center gap-2.5 flex-wrap">
                 <span className="text-base font-extrabold text-slate-900 tracking-tight">
@@ -242,24 +241,90 @@ export function TriageQueueView({
                 >
                   {item.urgency}
                 </span>
+
+                {/* Reverted Status Badge */}
+                {(() => {
+                  const sLow = (item.status || "").toLowerCase().trim();
+                  const isReverted = sLow.includes("revert") || sLow.includes("awaiting patient");
+                  if (!isReverted) return null;
+                  return (
+                    <span className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full text-[10px] font-bold bg-amber-50 text-amber-800 border border-amber-300">
+                      <RotateCcw className="w-3 h-3 text-amber-600" />
+                      <span>Reverted</span>
+                    </span>
+                  );
+                })()}
+                {item.scheduleTime && (
+                  <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-md text-[10px] font-bold bg-teal-50 text-teal-800 border border-teal-200">
+                    <Clock className="w-3 h-3 text-teal-600" />
+                    <span>
+                      {(() => {
+                        try {
+                          const d = new Date(item.scheduleTime);
+                          return `Slot: ${d.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}`;
+                        } catch {
+                          return "Scheduled";
+                        }
+                      })()}
+                    </span>
+                  </span>
+                )}
+                {/* Consultation Mode Badge */}
+                <span className={`inline-flex items-center gap-1 px-2 py-0.5 rounded-md text-[10px] font-bold border ${
+                  item.consultationMode === "online"
+                    ? "bg-indigo-50 text-indigo-800 border-indigo-200"
+                    : "bg-blue-50 text-blue-800 border-blue-200"
+                }`}>
+                  {item.consultationMode === "online" ? (
+                    <Video className="w-3 h-3 text-indigo-600" />
+                  ) : (
+                    <Building2 className="w-3 h-3 text-blue-600" />
+                  )}
+                  <span>{item.consultationMode === "online" ? "Online Teleconsult" : "In-Person Walk-in"}</span>
+                </span>
+                {/* Preferred Language Badge */}
+                <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-md text-[10px] font-bold bg-teal-50 text-teal-800 border border-teal-200/80">
+                  <Languages className="w-3 h-3 text-teal-600" />
+                  <span>{item.language || "Odia"}</span>
+                </span>
               </div>
 
               <div className="text-xs text-slate-600 flex items-center gap-2 flex-wrap">
                 <span className="font-semibold text-slate-800">
                   Patient ID: {item.patientId}
                 </span>
-                <span>&bull;</span>
-                <span className="text-slate-500">
-                  Submitted: {item.submittedTime}
-                </span>
-                <span>&bull;</span>
-                <span className="text-slate-500">
-                  {item.location}
-                </span>
+                {item.name && (
+                  <>
+                    <span>&bull;</span>
+                    <span className="font-medium text-slate-700">
+                      Name: {item.name}
+                    </span>
+                  </>
+                )}
+                {(item.age || item.gender) && (
+                  <>
+                    <span>&bull;</span>
+                    <span className="text-slate-500">
+                      {item.age ? `${item.age} yrs` : ""} {item.age && item.gender ? "•" : ""} {item.gender || ""}
+                    </span>
+                  </>
+                )}
+                {item.location && (
+                  <>
+                    <span>&bull;</span>
+                    <span className="text-slate-500">
+                      {item.location}
+                    </span>
+                  </>
+                )}
               </div>
 
               <p className="text-xs text-slate-600 line-clamp-1 italic max-w-2xl pt-0.5">
                 &ldquo;{item.chiefComplaint}&rdquo;
+              </p>
+
+              <p className="text-xs text-slate-500">
+                Submitted: {item.submittedTime}
               </p>
             </div>
 

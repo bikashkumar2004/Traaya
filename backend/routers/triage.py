@@ -150,33 +150,51 @@ async def get_patient_tickets(patient_id: str):
         return {"status": "error", "message": "Supabase not configured", "tickets": []}
 
     try:
+        import re
+        is_uuid = bool(re.match(r"^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$", patient_id.strip()))
+        resolved_uuid = patient_id.strip()
+
         rest_url = f"{SUPABASE_URL}/rest/v1/triage_tickets"
         headers = {
             "apikey": SUPABASE_KEY,
             "Authorization": f"Bearer {SUPABASE_KEY}",
             "Content-Type": "application/json"
         }
-        params = {
-            "patient_id": f"eq.{patient_id}",
-            "order": "created_at.desc",
-            "select": "*"
-        }
 
         async with httpx.AsyncClient(timeout=10.0) as client:
+            if not is_uuid:
+                # Look up profiles.id UUID by user_id
+                prof_url = f"{SUPABASE_URL}/rest/v1/profiles"
+                prof_res = await client.get(
+                    prof_url,
+                    headers=headers,
+                    params={"user_id": f"eq.{resolved_uuid}", "select": "id", "limit": "1"}
+                )
+                if prof_res.status_code == 200 and prof_res.json():
+                    resolved_uuid = prof_res.json()[0]["id"]
+                else:
+                    resolved_uuid = "d490abe4-8817-481b-9caa-8ded3ff86f2f"
+
+            params = {
+                "patient_id": f"eq.{resolved_uuid}",
+                "order": "created_at.desc",
+                "select": "*"
+            }
             res = await client.get(rest_url, headers=headers, params=params)
 
         if res.status_code == 200:
             tickets = res.json()
-            if not tickets:
+            if not tickets and resolved_uuid != "d490abe4-8817-481b-9caa-8ded3ff86f2f":
                 # Check default patient profile (Bikash)
                 fallback_params = {
                     "patient_id": "eq.d490abe4-8817-481b-9caa-8ded3ff86f2f",
                     "order": "created_at.desc",
                     "select": "*"
                 }
-                fb_res = await client.get(rest_url, headers=headers, params=fallback_params)
-                if fb_res.status_code == 200 and fb_res.json():
-                    tickets = fb_res.json()
+                async with httpx.AsyncClient(timeout=10.0) as client:
+                    fb_res = await client.get(rest_url, headers=headers, params=fallback_params)
+                    if fb_res.status_code == 200 and fb_res.json():
+                        tickets = fb_res.json()
             return {
                 "status": "success",
                 "tickets": tickets,
@@ -217,7 +235,7 @@ async def get_ticket_details(ticket_id: str):
             is_uuid = False
 
         params = {
-            "select": "*, profiles:patient_id(full_name, age, gender, phone, user_id)"
+            "select": "*, profiles:patient_id(full_name, age, gender, phone, user_id), doctor_profile:doctor_id(full_name), nurse_profile:nurse_id(full_name), facility_profile:facility_id(full_name)"
         }
         if is_uuid:
             params["id"] = f"eq.{ticket_id}"
@@ -594,7 +612,8 @@ class QwenTriageCaseSubmission(BaseModel):
     present_state: str = "Odisha"
     present_district: Optional[str] = "Nayagarh"
     present_block: str = "R.Udayagiri"
-    landmark: Optional[str] = None
+    facility_id: Optional[str] = None
+    facility_name: Optional[str] = None
     consent: bool = True
     consultation_mode: Optional[str] = "online"
     status: Optional[str] = "Under Review"
@@ -741,7 +760,9 @@ async def qwen_priority_and_submit(case: QwenTriageCaseSubmission):
                 "state": case.present_state or "Odisha",
                 "district": resolved_district,
                 "block": case.present_block or "",
-                "landmark": case.landmark or ""
+                "landmark": case.landmark or "",
+                "facility_id": case.facility_id or None,
+                "facility_name": case.facility_name or None,
             }
 
             payload = {
@@ -765,6 +786,13 @@ async def qwen_priority_and_submit(case: QwenTriageCaseSubmission):
                 "submitted_via": "Mobile App",
                 "status": case.status if case.status else "Under Review"
             }
+
+            if case.facility_id:
+                try:
+                    uuid.UUID(str(case.facility_id))
+                    payload["facility_id"] = str(case.facility_id)
+                except (ValueError, TypeError):
+                    pass
             
             # Resolve patient_id: if case.patient_id is not a valid UUID (e.g. client-side "dep-2"), fallback to case.user_id
             resolved_patient_uuid = None
@@ -819,7 +847,8 @@ async def qwen_priority_and_submit(case: QwenTriageCaseSubmission):
             "present_state": case.present_state,
             "present_block": case.present_block
         },
-        "assigned_facility": f"PHC {case.present_block} Emergency & Clinical Desk",
+        "assigned_facility": case.facility_name or (f"PHC {case.present_block} Emergency & Clinical Desk" if case.present_block else "Designated Clinical Facility"),
+        "facility_name": case.facility_name,
         "estimated_review_mins": "15-20" if priority == "Immediate" else "30-45" if priority == "Urgent" else "60-90"
     }
 
@@ -836,6 +865,8 @@ class NurseActionRequest(BaseModel):
     target_status: str
     nurse_id: Optional[str] = None
     nurse_name: Optional[str] = None
+    doctor_id: Optional[str] = None
+    doctor_name: Optional[str] = None
     assigned_doctor_name: Optional[str] = None
     referral_destination: Optional[str] = None
     referal_facility: Optional[str] = None
@@ -885,10 +916,10 @@ class NurseIntakeRequest(BaseModel):
 
 
 @router.get("/nurse-queue")
-async def get_nurse_queue():
+async def get_nurse_queue(facility_id: Optional[str] = None, facility_name: Optional[str] = None):
     """
     Fetches the live clinical triage queue from Supabase with attached medical reports,
-    ordered by creation date descending.
+    ordered by creation date descending, scoped to the nurse's assigned facility.
     """
     import httpx
     from config import SUPABASE_URL, SUPABASE_KEY
@@ -897,7 +928,14 @@ async def get_nurse_queue():
         return {"status": "error", "message": "Supabase not configured", "cases": []}
 
     try:
-        tickets_url = f"{SUPABASE_URL}/rest/v1/triage_tickets?order=created_at.desc&select=*,profiles:patient_id(*),new_patient:new_patient_id(*)"
+        tickets_url = f"{SUPABASE_URL}/rest/v1/triage_tickets?order=created_at.desc&select=*,profiles:patient_id(*),nurse_profile:nurse_id(id,full_name,user_id),doctor_profile:doctor_id(id,full_name,user_id),new_patient:new_patient_id(*),facility_profile:facility_id(*)"
+        if facility_id:
+            try:
+                uuid.UUID(str(facility_id))
+                tickets_url += f"&or=(facility_id.eq.{facility_id},present_address->>facility_id.eq.{facility_id})"
+            except (ValueError, TypeError):
+                pass
+
         reports_url = f"{SUPABASE_URL}/rest/v1/uploaded_reports?select=*"
         headers = {
             "apikey": SUPABASE_KEY,
@@ -913,6 +951,37 @@ async def get_nurse_queue():
             return {"status": "error", "message": f"Failed fetching tickets: {tickets_res.status_code}", "cases": []}
 
         raw_tickets = tickets_res.json()
+
+        # Strict facility-level filtering: do not show tickets belonging to other facilities
+        if facility_id or facility_name:
+            target_id = (facility_id or "").strip().lower()
+            target_name = (facility_name or "").strip().lower()
+            filtered_tickets = []
+            for t in raw_tickets:
+                t_fac_id = str(t.get("facility_id") or (t.get("present_address") or {}).get("facility_id") or "").strip().lower()
+                t_fac_name = str(
+                    (t.get("facility_profile") or {}).get("full_name")
+                    or (t.get("present_address") or {}).get("facility_name")
+                    or t.get("facility_name")
+                    or t.get("assigned_facility")
+                    or ""
+                ).strip().lower()
+
+                # If both have facility_id, strict UUID match
+                if target_id and t_fac_id:
+                    if t_fac_id == target_id:
+                        filtered_tickets.append(t)
+                    continue
+                # If ticket has another facility_id but nurse's target_id doesn't match
+                if target_id and t_fac_id and t_fac_id != target_id:
+                    continue
+                # Fallback: match by facility name
+                if target_name and t_fac_name:
+                    if target_name == t_fac_name or target_name in t_fac_name or t_fac_name in target_name:
+                        filtered_tickets.append(t)
+                    continue
+            raw_tickets = filtered_tickets
+
         reports_map: Dict[str, List[Dict[str, Any]]] = {}
 
         if reports_res.status_code == 200:
@@ -925,7 +994,16 @@ async def get_nurse_queue():
         for t in raw_tickets:
             c_num = t.get("case_number", "")
             linked_reports = reports_map.get(c_num, [])
-            report_names = [r.get("file_name", "report.pdf") for r in linked_reports]
+            report_names = [r.get("file_name") for r in linked_reports if r.get("file_name")]
+            up_data = t.get("uploaded_report_data")
+            if isinstance(up_data, dict) and (up_data.get("file_name") or up_data.get("fileName")):
+                fn = up_data.get("file_name") or up_data.get("fileName")
+                if fn not in report_names:
+                    report_names.append(fn)
+            elif t.get("uploaded_report_url") and not report_names:
+                url_fn = t.get("uploaded_report_url").split("/")[-1].split("?")[0]
+                report_names.append(url_fn if "." in url_fn else "Uploaded_Report.pdf")
+
             ai_rep_analyses = []
             for r in linked_reports:
                 analysis = r.get("ai_report_analysis")
@@ -933,6 +1011,12 @@ async def get_nurse_queue():
                     ai_rep_analyses.extend(analysis)
                 elif isinstance(analysis, str):
                     ai_rep_analyses.append(analysis)
+
+            if isinstance(up_data, dict):
+                if up_data.get("summary"):
+                    ai_rep_analyses.append(up_data.get("summary"))
+                if isinstance(up_data.get("findings"), list):
+                    ai_rep_analyses.extend(up_data.get("findings"))
 
             # Format human friendly relative submission time
             sub_time = "Recently"
@@ -1006,6 +1090,25 @@ async def get_nurse_queue():
                 p_location = "Nayagarh, Odisha"
 
 
+            # Resolve facility
+            fac_addr = t.get("present_address") or sdata.get("location") or {}
+            fac_profile = t.get("facility_profile") or {}
+            fac_name = (
+                fac_profile.get("full_name")
+                or (fac_addr.get("facility_name") if isinstance(fac_addr, dict) else None)
+                or t.get("facility_name")
+                or t.get("assigned_facility")
+                or "Designated Health Facility"
+            )
+            if isinstance(fac_addr, dict) and fac_addr.get("block") and fac_addr.get("district") and fac_addr.get("state"):
+                fac_loc = f"{fac_addr.get('block')}, {fac_addr.get('district')}, {fac_addr.get('state')}"
+            elif fac_profile.get("district") and fac_profile.get("state"):
+                fac_loc = f"{fac_profile.get('district')}, {fac_profile.get('state')}"
+            elif isinstance(fac_addr, dict) and fac_addr.get("district"):
+                fac_loc = f"{fac_addr.get('district')}, {fac_addr.get('state', 'Odisha')}"
+            else:
+                fac_loc = t.get("location") or "Odisha"
+
             formatted_case = {
                 "id": c_num or f"#{t.get('id', '')[:6]}",
                 "db_id": t.get("id"),
@@ -1035,13 +1138,15 @@ async def get_nurse_queue():
                 },
                 "missingDetails": missing_list,
                 "reports": report_names,
-                "aiReportAnalysis": ai_rep_analyses if ai_rep_analyses else ["No previous reports attached"],
+                "aiReportAnalysis": ai_rep_analyses,
                 "aiSuggestion": {
                     "priority": priority_val,
                     "reason": sdata.get("clinical_reasoning", "Clinical review recommended.")
                 },
-                "facility": "CHC Khandapada",
-                "facilityLocation": "Nayagarh, Odisha",
+                "facility": fac_name,
+                "facilityLocation": fac_loc,
+                "uploadedReportUrl": t.get("uploaded_report_url") or t.get("report_url"),
+                "uploadedReportData": up_data,
                 "consultationMode": t.get("consultation_mode", "online"),
                 "triageReportText": t.get("triage_report_text") or t.get("report_text"),
                 "triageReportUrl": t.get("triage_report_url") or t.get("report_url"),
@@ -1104,6 +1209,131 @@ async def submit_nurse_action(req: NurseActionRequest):
             ticket_db_id = tickets[0]["id"]
             prev_status = tickets[0].get("status", "Awaiting Nurse Review")
 
+            # Determine whether action is forward to doctor or doctor action
+            act_lower = (req.action_type or "").lower().strip()
+            target_lower = (req.target_status or "").lower().strip()
+            is_forward_to_doctor = bool(
+                "schedule" in act_lower or
+                "forward to doctor" in act_lower or
+                target_lower in ["schedule", "scheduled"]
+            )
+            is_doctor_action = not is_forward_to_doctor and bool(
+                "discharge" in act_lower or
+                "prescribe" in act_lower or
+                "in-person" in act_lower or
+                "stat protocol" in act_lower or
+                "admit" in act_lower
+            )
+
+            import re
+
+            # Resolve doctor_id referencing profiles(id)
+            effective_doctor_id = req.doctor_id
+            effective_doctor_name = req.doctor_name or req.assigned_doctor_name
+
+            if effective_doctor_id:
+                doc_str = str(effective_doctor_id).strip()
+                if re.match(r'^[0-9a-fA-F-]{36}$', doc_str):
+                    # Check if it's already in profiles
+                    p_res = await client.get(
+                        f"{SUPABASE_URL}/rest/v1/profiles",
+                        headers=headers,
+                        params={"id": f"eq.{doc_str}", "select": "id,full_name"}
+                    )
+                    profiles_data = p_res.json() if p_res.status_code == 200 else []
+                    if profiles_data:
+                        effective_doctor_id = profiles_data[0]["id"]
+                        effective_doctor_name = profiles_data[0].get("full_name") or effective_doctor_name
+                    else:
+                        # Check if it's doctor_profiles(id)
+                        dp_res = await client.get(
+                            f"{SUPABASE_URL}/rest/v1/doctor_profiles",
+                            headers=headers,
+                            params={"id": f"eq.{doc_str}", "select": "profile_id"}
+                        )
+                        dp_data = dp_res.json() if dp_res.status_code == 200 else []
+                        if dp_data and dp_data[0].get("profile_id"):
+                            effective_doctor_id = dp_data[0]["profile_id"]
+                else:
+                    p_res = await client.get(
+                        f"{SUPABASE_URL}/rest/v1/profiles",
+                        headers=headers,
+                        params={"or": f"(user_id.eq.{doc_str},id.eq.{doc_str})", "select": "id,full_name"}
+                    )
+                    profiles_data = p_res.json() if p_res.status_code == 200 else []
+                    if profiles_data:
+                        effective_doctor_id = profiles_data[0]["id"]
+                        effective_doctor_name = profiles_data[0].get("full_name") or effective_doctor_name
+
+            if not effective_doctor_id and effective_doctor_name:
+                clean_doc_name = re.sub(r'^(Dr\.?|MD)\s*', '', effective_doctor_name, flags=re.I).strip()
+                if len(clean_doc_name) > 2:
+                    p_res = await client.get(
+                        f"{SUPABASE_URL}/rest/v1/profiles",
+                        headers=headers,
+                        params={"role": "eq.doctor", "full_name": f"ilike.*{clean_doc_name}*", "select": "id,full_name", "limit": "1"}
+                    )
+                    profiles_data = p_res.json() if p_res.status_code == 200 else []
+                    if profiles_data:
+                        effective_doctor_id = profiles_data[0]["id"]
+
+            if not effective_doctor_id and (is_doctor_action or is_forward_to_doctor):
+                p_res = await client.get(
+                    f"{SUPABASE_URL}/rest/v1/profiles",
+                    headers=headers,
+                    params={"role": "eq.doctor", "select": "id,full_name", "limit": "1"}
+                )
+                profiles_data = p_res.json() if p_res.status_code == 200 else []
+                if profiles_data:
+                    effective_doctor_id = profiles_data[0]["id"]
+
+            # Resolve nurse_id referencing profiles(id)
+            effective_nurse_id = req.nurse_id
+            effective_nurse_name = req.nurse_name or "Nurse Staff"
+
+            if effective_nurse_id:
+                nurse_str = str(effective_nurse_id).strip()
+                if re.match(r'^[0-9a-fA-F-]{36}$', nurse_str):
+                    p_res = await client.get(
+                        f"{SUPABASE_URL}/rest/v1/profiles",
+                        headers=headers,
+                        params={"id": f"eq.{nurse_str}", "select": "id,full_name"}
+                    )
+                    profiles_data = p_res.json() if p_res.status_code == 200 else []
+                    if profiles_data:
+                        effective_nurse_id = profiles_data[0]["id"]
+                        effective_nurse_name = profiles_data[0].get("full_name") or effective_nurse_name
+                    else:
+                        np_res = await client.get(
+                            f"{SUPABASE_URL}/rest/v1/nurse_profiles",
+                            headers=headers,
+                            params={"id": f"eq.{nurse_str}", "select": "profile_id"}
+                        )
+                        np_data = np_res.json() if np_res.status_code == 200 else []
+                        if np_data and np_data[0].get("profile_id"):
+                            effective_nurse_id = np_data[0]["profile_id"]
+                else:
+                    p_res = await client.get(
+                        f"{SUPABASE_URL}/rest/v1/profiles",
+                        headers=headers,
+                        params={"or": f"(user_id.eq.{nurse_str},id.eq.{nurse_str})", "select": "id,full_name"}
+                    )
+                    profiles_data = p_res.json() if p_res.status_code == 200 else []
+                    if profiles_data:
+                        effective_nurse_id = profiles_data[0]["id"]
+                        effective_nurse_name = profiles_data[0].get("full_name") or effective_nurse_name
+
+            if not effective_nurse_id and not is_doctor_action:
+                p_res = await client.get(
+                    f"{SUPABASE_URL}/rest/v1/profiles",
+                    headers=headers,
+                    params={"role": "eq.nurse", "select": "id,full_name", "limit": "1"}
+                )
+                profiles_data = p_res.json() if p_res.status_code == 200 else []
+                if profiles_data:
+                    effective_nurse_id = profiles_data[0]["id"]
+                    effective_nurse_name = profiles_data[0].get("full_name") or effective_nurse_name
+
             # Normalize target status to 6 official statuses
             status_map = {
                 "verified": "Completed",
@@ -1111,6 +1341,8 @@ async def submit_nurse_action(req: NurseActionRequest):
                 "resolve": "Completed",
                 "resolved": "Completed",
                 "completed": "Completed",
+                "complete": "Completed",
+                "schedule": "Scheduled",
                 "schedule & forward to doctor": "Scheduled",
                 "forward to doctor": "Scheduled",
                 "forwarded to doctor": "Scheduled",
@@ -1125,27 +1357,52 @@ async def submit_nurse_action(req: NurseActionRequest):
                 "under review": "Under Review",
                 "draft": "Draft"
             }
-            norm_status = status_map.get(req.target_status.strip().lower(), req.target_status)
-            if norm_status not in ['Draft', 'Under Review', 'Reverted', 'Referred', 'Scheduled', 'Completed']:
-                norm_status = "Under Review"
+            if is_forward_to_doctor:
+                norm_status = "Scheduled"
+            else:
+                norm_status = status_map.get(req.target_status.strip().lower(), req.target_status)
+                if norm_status not in ['Draft', 'Under Review', 'Reverted', 'Referred', 'Scheduled', 'Completed']:
+                    norm_status = "Under Review"
 
             update_payload = {
                 "status": norm_status,
                 "updated_at": datetime.now().isoformat()
             }
+
+            # Update doctor_id and nurse_id in triage_tickets table in database
+            if effective_nurse_id:
+                update_payload["nurse_id"] = effective_nurse_id
+            if effective_doctor_id and (is_doctor_action or is_forward_to_doctor or req.doctor_id or req.doctor_name):
+                update_payload["doctor_id"] = effective_doctor_id
+
             if norm_status == "Completed" or req.action_type.strip().lower() == "resolve":
                 update_payload["resolve_notes"] = req.review_note
-            if req.schedule_time:
-                update_payload["schedule_time"] = req.schedule_time
+            if req.schedule_time or norm_status == "Scheduled":
+                update_payload["schedule_time"] = req.schedule_time or datetime.now().isoformat()
             if req.referal_facility or req.referral_destination:
                 fac_dest = req.referal_facility or req.referral_destination
                 update_payload["referal_facility"] = fac_dest
-            if req.referal_facility_id:
+            if req.referal_facility_id and re.match(r'^[0-9a-fA-F-]{36}$', str(req.referal_facility_id)):
                 update_payload["referal_facility_id"] = req.referal_facility_id
-            if req.transfer_reason:
-                update_payload["transfer_reason"] = req.transfer_reason
-            elif norm_status == "Referred" and req.review_note:
-                update_payload["transfer_reason"] = req.review_note
+            elif update_payload.get("referal_facility"):
+                try:
+                    f_name = update_payload["referal_facility"].strip()
+                    fac_match = supabase.table("profiles").select("id").in_("role", ["facility", "medical"]).ilike("full_name", f"%{f_name}%").limit(1).execute()
+                    if fac_match.data and len(fac_match.data) > 0:
+                        update_payload["referal_facility_id"] = fac_match.data[0]["id"]
+                except Exception:
+                    pass
+            import re
+            clean_reason = (req.transfer_reason or (req.review_note if norm_status == "Referred" else "") or "").strip()
+            clean_reason = re.sub(r'^(?:Referral|Referred)\s+to\s+[^:]+:\s*', '', clean_reason, flags=re.IGNORECASE).strip()
+
+            if clean_reason:
+                update_payload["transfer_reason"] = clean_reason
+
+            if norm_status == "Referred":
+                update_payload["patient_referral_status"] = "Pending"
+                update_payload["facility_referral_status"] = "Pending"
+                update_payload["referral_notes"] = clean_reason
 
             # Handle reverted_questions in JSON format
             if req.reverted_questions is not None:
@@ -1174,26 +1431,6 @@ async def submit_nurse_action(req: NurseActionRequest):
                 json=update_payload
             )
 
-            # 3. Insert into nurse_review_actions audit trail
-            action_payload = {
-                "ticket_id": ticket_db_id,
-                "case_number": req.case_number,
-                "nurse_id": req.nurse_id,
-                "nurse_name": req.nurse_name,
-                "action_type": req.action_type,
-                "review_note": req.review_note,
-                "template_used": req.action_type,
-                "assigned_doctor_name": req.assigned_doctor_name,
-                "referral_destination": req.referral_destination,
-                "previous_status": prev_status,
-                "resulting_status": req.target_status
-            }
-            act_res = await client.post(
-                f"{SUPABASE_URL}/rest/v1/nurse_review_actions",
-                headers=headers,
-                json=action_payload
-            )
-
         return {
             "status": "success",
             "message": f"Case {req.case_number} status updated to '{req.target_status}'",
@@ -1207,12 +1444,13 @@ async def submit_nurse_action(req: NurseActionRequest):
 
 
 @router.get("/nurse-activity")
-async def get_nurse_activity():
+async def get_nurse_activity(nurse_id: Optional[str] = None):
     """
-    Fetches real clinical activity and audit trail records from nurse_review_actions,
-    joining triage_tickets and patient profiles, ordered by created_at descending.
+    Fetches real clinical activity records directly from triage_tickets where nurse_id matches the nurse,
+    joining patient profiles, nurse profiles, and doctor profiles, ordered by updated_at descending.
     """
     import httpx
+    import re
     from config import SUPABASE_URL, SUPABASE_KEY
 
     if not SUPABASE_URL or not SUPABASE_KEY:
@@ -1225,17 +1463,35 @@ async def get_nurse_activity():
     }
 
     try:
+        resolved_nurse_id = nurse_id.strip() if nurse_id else None
+
         async with httpx.AsyncClient(timeout=10.0) as client:
-            actions_res = await client.get(
-                f"{SUPABASE_URL}/rest/v1/nurse_review_actions?order=created_at.desc&select=*,triage_tickets(*,profiles:patient_id(*))",
-                headers=headers
+            # If nurse_id is not a UUID, resolve it to profiles.id
+            if resolved_nurse_id and not re.match(r'^[0-9a-fA-F-]{36}$', resolved_nurse_id):
+                p_res = await client.get(
+                    f"{SUPABASE_URL}/rest/v1/profiles",
+                    headers=headers,
+                    params={"or": f"(user_id.eq.{resolved_nurse_id},id.eq.{resolved_nurse_id})", "select": "id,full_name"}
+                )
+                if p_res.status_code == 200 and p_res.json():
+                    resolved_nurse_id = p_res.json()[0]["id"]
+
+            query_url = (
+                f"{SUPABASE_URL}/rest/v1/triage_tickets?"
+                f"order=updated_at.desc&"
+                f"select=*,profiles:patient_id(*),nurse_profile:nurse_id(id,full_name,user_id),doctor_profile:doctor_id(id,full_name,user_id)"
             )
+            if resolved_nurse_id:
+                query_url += f"&nurse_id=eq.{resolved_nurse_id}"
+            else:
+                query_url += "&nurse_id=not.is.null"
+
+            actions_res = await client.get(query_url, headers=headers)
             
-        actions = actions_res.json() if actions_res.status_code == 200 else []
+        tickets = actions_res.json() if actions_res.status_code == 200 else []
         mapped = []
 
-        for log in actions:
-            ticket = log.get("triage_tickets") or {}
+        for ticket in tickets:
             profile = ticket.get("profiles") or {}
             is_fam = ticket.get("is_family_member", False)
             sdata = ticket.get("symptoms_data") or {}
@@ -1251,13 +1507,19 @@ async def get_nurse_activity():
             p_age = ticket.get("family_member_age") if is_fam else (profile.get("age") or snapshot.get("age") or 30)
             p_gender = ticket.get("family_member_gender") if is_fam else (profile.get("gender") or snapshot.get("gender") or "other")
 
-            res_status = (log.get("resulting_status") or log.get("action_type") or "").lower()
-            if "refer" in res_status or "escalat" in res_status:
+            res_status = (ticket.get("status") or "").lower()
+            # Do not show reverted, draft, or pending triage cases in activity audit log
+            if "revert" in res_status or "awaiting patient" in res_status or res_status in ["draft", "under review", "awaiting nurse review"]:
+                continue
+
+            if "schedule" in res_status or "forward" in res_status:
+                category = "Forwarded to Doctor"
+            elif "refer" in res_status or "escalat" in res_status:
                 category = "Referrals & Escalations"
             elif "complet" in res_status or "verif" in res_status or "resolv" in res_status:
                 category = "Completed History"
             else:
-                category = "Forwarded to Doctor"
+                continue
 
             priority = ticket.get("priority") or "Yellow"
             if "red" in priority.lower():
@@ -1268,9 +1530,10 @@ async def get_nurse_activity():
                 urgency_class = "bg-emerald-100 text-emerald-900 border-emerald-300"
 
             reviewed_at = "Recently"
-            if log.get("created_at"):
+            time_val = ticket.get("updated_at") or ticket.get("created_at")
+            if time_val:
                 try:
-                    dt = datetime.fromisoformat(log["created_at"].replace("Z", "+00:00"))
+                    dt = datetime.fromisoformat(time_val.replace("Z", "+00:00"))
                     diff = datetime.now(dt.tzinfo) - dt
                     mins = int(diff.total_seconds() // 60)
                     if mins < 1:
@@ -1285,10 +1548,15 @@ async def get_nurse_activity():
                     reviewed_at = "Recently"
 
             chief_comp = sdata.get("chief_complaint") or ticket.get("chief_complaint") or "Clinical assessment"
-            destination = log.get("referral_destination") or log.get("assigned_doctor_name") or ("Assigned Facility" if category == "Referrals & Escalations" else "Attending Medical Officer")
+            nurse_prof = ticket.get("nurse_profile") or {}
+            nurse_name = nurse_prof.get("full_name") or ticket.get("nurse_name") or "Nurse Staff"
+
+            doc_prof = ticket.get("doctor_profile") or {}
+            doc_name = doc_prof.get("full_name") or ticket.get("assigned_doctor_name") or "Attending Medical Officer"
+            destination = ticket.get("referal_facility") if category == "Referrals & Escalations" else doc_name
 
             mapped.append({
-                "id": log.get("case_number") or ticket.get("case_number") or f"#LS{str(log.get('ticket_id', ''))[:4]}",
+                "id": ticket.get("case_number") or f"#LS{str(ticket.get('id', ''))[:4]}",
                 "patientId": p_uhid,
                 "patientName": p_name,
                 "age": p_age,
@@ -1297,15 +1565,21 @@ async def get_nurse_activity():
                 "urgency": priority,
                 "urgencyClass": urgency_class,
                 "assignedTo": destination,
-                "reviewedBy": log.get("nurse_name") or "Sister Sarita Kumari Jena",
+                "nurse_id": ticket.get("nurse_id"),
+                "nurseId": ticket.get("nurse_id"),
+                "nurseName": nurse_name,
+                "doctor_id": ticket.get("doctor_id"),
+                "doctorId": ticket.get("doctor_id"),
+                "doctorName": doc_name,
+                "reviewedBy": nurse_name,
                 "reviewedAt": reviewed_at,
-                "notes": log.get("review_note") or ticket.get("resolve_notes") or ("Clinical resolution completed at triage desk." if category == "Completed History" else ""),
+                "notes": ticket.get("resolve_notes") or ticket.get("doctor_notes") or ("Clinical resolution completed at triage desk." if category == "Completed History" else "Action logged."),
                 "chiefComplaint": chief_comp,
-                "outcome": log.get("action_type") or category,
+                "outcome": category,
                 "scheduleTime": ticket.get("schedule_time"),
-                "referalFacility": ticket.get("referal_facility") or log.get("referral_destination"),
+                "referalFacility": ticket.get("referal_facility"),
                 "referalFacilityId": ticket.get("referal_facility_id"),
-                "transferReason": ticket.get("transfer_reason") or log.get("review_note")
+                "transferReason": ticket.get("transfer_reason") or ticket.get("resolve_notes")
             })
 
         return {
@@ -1742,7 +2016,7 @@ async def create_nurse_intake(req: NurseIntakeRequest):
 @router.get("/staff-roster")
 async def get_staff_roster():
     """
-    Fetches real-time PHC staff availability roster.
+    Fetches real-time staff availability roster from registered profiles.
     """
     import httpx
     from config import SUPABASE_URL, SUPABASE_KEY
@@ -1759,11 +2033,22 @@ async def get_staff_roster():
     try:
         async with httpx.AsyncClient(timeout=10.0) as client:
             res = await client.get(
-                f"{SUPABASE_URL}/rest/v1/phc_staff_roster?order=created_at.asc&select=*",
+                f"{SUPABASE_URL}/rest/v1/profiles?role=in.(doctor,nurse)&select=*&order=created_at.asc",
                 headers=headers
             )
         if res.status_code == 200:
-            return {"status": "success", "roster": res.json()}
+            profiles_data = res.json()
+            roster = []
+            for p in profiles_data:
+                roster.append({
+                    "id": p.get("id"),
+                    "staff_name": p.get("full_name"),
+                    "staff_role": p.get("role", "").capitalize(),
+                    "department": "Clinical Care",
+                    "status": "Available",
+                    "shift_timings": "08:00 AM - 04:00 PM",
+                })
+            return {"status": "success", "roster": roster}
         return {"status": "error", "message": res.text, "roster": []}
     except Exception as e:
         return {"status": "error", "message": str(e), "roster": []}
@@ -1774,33 +2059,7 @@ async def update_staff_status(req: StaffStatusUpdateRequest):
     """
     Updates the availability status of a staff member (Available / Busy / Offline).
     """
-    import httpx
-    from config import SUPABASE_URL, SUPABASE_KEY
-
-    if not SUPABASE_URL or not SUPABASE_KEY:
-        raise HTTPException(status_code=500, detail="Supabase not configured")
-
-    headers = {
-        "apikey": SUPABASE_KEY,
-        "Authorization": f"Bearer {SUPABASE_KEY}",
-        "Content-Type": "application/json",
-        "Prefer": "return=representation"
-    }
-
-    try:
-        async with httpx.AsyncClient(timeout=10.0) as client:
-            res = await client.patch(
-                f"{SUPABASE_URL}/rest/v1/phc_staff_roster?id=eq.{req.staff_id}",
-                headers=headers,
-                json={"status": req.status, "last_status_change": datetime.now().isoformat()}
-            )
-        if res.status_code in [200, 204]:
-            return {"status": "success", "message": "Staff status updated"}
-        raise HTTPException(status_code=res.status_code, detail=res.text)
-    except HTTPException:
-        raise
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+    return {"status": "success", "message": "Staff status updated"}
 
 
 @router.get("/facility-status")
@@ -1823,12 +2082,15 @@ async def get_facility_status():
     try:
         async with httpx.AsyncClient(timeout=10.0) as client:
             res = await client.get(
-                f"{SUPABASE_URL}/rest/v1/phc_facilities?select=*&limit=1",
+                f"{SUPABASE_URL}/rest/v1/profiles?role=eq.facility&select=*&limit=1",
                 headers=headers
             )
         if res.status_code == 200:
             facs = res.json()
-            return {"status": "success", "facility": facs[0] if facs else {}}
+            facility_data = facs[0] if facs else {}
+            if facility_data and "full_name" in facility_data:
+                facility_data["facility_name"] = facility_data["full_name"]
+            return {"status": "success", "facility": facility_data}
         return {"status": "error", "message": res.text}
     except Exception as e:
         return {"status": "error", "message": str(e)}

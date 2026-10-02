@@ -1,6 +1,6 @@
 "use client";
 
-import React, { useState, useEffect, useRef, Suspense } from "react";
+import React, { useState, useEffect, useRef, useMemo, Suspense } from "react";
 import Link from "next/link";
 import { useSearchParams } from "next/navigation";
 import {
@@ -39,132 +39,11 @@ import {
   Video
 } from "lucide-react";
 import { useAuth, INDIAN_LANGUAGES, FamilyDependent } from "@/lib/auth-context";
-
-// State and Block mapping for Step 4
-const INDIAN_STATES_AND_DISTRICTS: Record<string, string[]> = {
-  "Odisha": [
-    "Nayagarh",
-    "Gajapati",
-    "Ganjam",
-    "Khordha",
-    "Cuttack",
-    "Puri",
-    "Rayagada",
-    "Balasore",
-    "Sambalpur",
-    "Sundargarh",
-    "Kendrapara",
-    "Mayurbhanj",
-    "Koraput"
-  ],
-  "Andhra Pradesh": [
-    "Srikakulam",
-    "Visakhapatnam",
-    "Vizianagaram",
-    "Krishna",
-    "Guntur",
-    "East Godavari",
-    "Chittoor"
-  ],
-  "West Bengal": [
-    "Paschim Medinipur",
-    "Purba Medinipur",
-    "Darjeeling",
-    "North 24 Parganas",
-    "South 24 Parganas",
-    "Kolkata"
-  ],
-  "Maharashtra": [
-    "Pune",
-    "Nashik",
-    "Nagpur",
-    "Thane",
-    "Mumbai Suburban",
-    "Aurangabad"
-  ],
-  "Karnataka": [
-    "Bengaluru Urban",
-    "Bengaluru Rural",
-    "Mysuru",
-    "Dakshina Kannada",
-    "Dharwad"
-  ],
-  "Bihar": [
-    "Patna",
-    "Gaya",
-    "Muzaffarpur",
-    "Bhagalpur",
-    "Darbhanga"
-  ]
-};
-
-const INDIAN_STATES_AND_BLOCKS: Record<string, string[]> = {
-  "Odisha": [
-    "R.Udayagiri",
-    "Rayagada",
-    "Mohana",
-    "Nuagada",
-    "Gosani",
-    "Parlakhemundi",
-    "Kasinagar",
-    "Digapahandi",
-    "Hinjilicut",
-    "Chatrapur",
-    "Bhubaneswar",
-    "Cuttack Sadar"
-  ],
-  "Andhra Pradesh": [
-    "Srikakulam Rural",
-    "Tekkali",
-    "Palasa",
-    "Visakhapatnam Urban",
-    "Anakapalle",
-    "Gajuwaka",
-    "Vijayawada Rural"
-  ],
-  "West Bengal": [
-    "Kharagpur I",
-    "Medinipur Sadar",
-    "Durgapur",
-    "Siliguri",
-    "Barasat I"
-  ],
-  "Maharashtra": [
-    "Haveli (Pune)",
-    "Mulshi",
-    "Nashik Rural",
-    "Nagpur Rural",
-    "Thane Urban"
-  ],
-  "Karnataka": [
-    "Bengaluru South",
-    "Bengaluru North",
-    "Mysuru Rural",
-    "Mangaluru Rural",
-    "Hubballi"
-  ],
-  "Bihar": [
-    "Patna Sadar",
-    "Danapur",
-    "Gaya Town",
-    "Muzaffarpur Sadar",
-    "Bhagalpur"
-  ],
-  "Uttar Pradesh": [
-    "Varanasi Sadar",
-    "Lucknow Urban",
-    "Kanpur Sadar",
-    "Gorakhpur Urban",
-    "Agra Rural"
-  ],
-  "Delhi (NCT)": [
-    "Central Delhi",
-    "South Delhi",
-    "West Delhi",
-    "North Delhi",
-    "East Delhi"
-  ]
-};
+import {
+  getIndiaStates,
+  getDistrictsForState,
+  getBlocksForDistrict,
+} from "@/lib/india-locations";
 
 // Dynamic Symptom Suggestion Chips
 const SYMPTOM_CHIPS = [
@@ -223,19 +102,19 @@ function PatientReportSymptomsForm() {
 
   const effectivePatientName = selectedDependent
     ? selectedDependent.fullName
-    : user?.fullName || "Bikash Kumar Choudhury";
+    : user?.fullName || "Patient";
 
   const effectivePatientAge = selectedDependent
-    ? Number(selectedDependent.age) || 30
-    : Number(user?.age) || 22;
+    ? (selectedDependent.age ? Number(selectedDependent.age) : "")
+    : (user?.age ? Number(user.age) : "");
 
   const effectivePatientGender = selectedDependent
-    ? selectedDependent.gender || "Female"
-    : user?.gender || "Male";
+    ? selectedDependent.gender || ""
+    : user?.gender || "";
 
   const effectivePatientUhid = selectedDependent
-    ? selectedDependent.patientUhid || "PAT-9920"
-    : user?.patientUhid || "PAT-8402";
+    ? selectedDependent.patientUhid || ""
+    : user?.patientUhid || user?.userId || "";
 
   const effectiveRelation = selectedDependent
     ? selectedDependent.relation
@@ -334,11 +213,29 @@ function PatientReportSymptomsForm() {
   } | null>(null);
   const [reportInquiryAnswers, setReportInquiryAnswers] = useState<Record<string, string>>({});
 
-  // Step 4: Present Address
-  const [presentState, setPresentState] = useState<string>("Odisha");
-  const [presentDistrict, setPresentDistrict] = useState<string>("Nayagarh");
-  const [presentBlock, setPresentBlock] = useState<string>("R.Udayagiri");
-  const [landmark, setLandmark] = useState<string>("Near Main PHC Road, Post Office Lane");
+  // Step 4: Present Address & Designated Facility
+  const [presentState, setPresentState] = useState<string>("");
+  const [presentDistrict, setPresentDistrict] = useState<string>("");
+  const [presentBlock, setPresentBlock] = useState<string>("");
+  const [landmark, setLandmark] = useState<string>("");
+
+  // Health Facilities Directory
+  const [facilitiesList, setFacilitiesList] = useState<Array<{
+    id: string;
+    user_id?: string;
+    facility_name: string;
+    role?: string;
+    state?: string;
+    district?: string;
+    block?: string;
+    city?: string;
+    address_line1?: string;
+    department?: string;
+    hpr_id?: string;
+  }>>([]);
+  const [isLoadingFacilities, setIsLoadingFacilities] = useState<boolean>(false);
+  const [selectedFacilityId, setSelectedFacilityId] = useState<string>("");
+  const [selectedFacilityName, setSelectedFacilityName] = useState<string>("");
 
   // Step 5: Review & Submission
   const [consentChecked, setConsentChecked] = useState<boolean>(false);
@@ -388,7 +285,10 @@ function PatientReportSymptomsForm() {
           if (t.present_address.district) setPresentDistrict(t.present_address.district);
           if (t.present_address.block) setPresentBlock(t.present_address.block);
           if (t.present_address.landmark) setLandmark(t.present_address.landmark);
+          if (t.present_address.facility_id) setSelectedFacilityId(t.present_address.facility_id);
+          if (t.present_address.facility_name) setSelectedFacilityName(t.present_address.facility_name);
         }
+        if (t.facility_id) setSelectedFacilityId(t.facility_id);
 
         if (t.preferred_language) setSelectedLanguage(t.preferred_language);
         if (t.consultation_mode) setIsOnlineTeleconsult(t.consultation_mode === "online");
@@ -427,17 +327,89 @@ function PatientReportSymptomsForm() {
     };
   }, [draftIdParam]);
 
-  // Synchronize district and blocks dropdowns when state changes
+  // Fetch available registered facilities from DB
   useEffect(() => {
-    const districts = INDIAN_STATES_AND_DISTRICTS[presentState] || ["Nayagarh"];
-    if (districts.length > 0 && !districts.includes(presentDistrict)) {
-      setPresentDistrict(districts[0]);
+    let isMounted = true;
+    async function loadFacilities() {
+      try {
+        setIsLoadingFacilities(true);
+        const res = await fetch("/api/facilities");
+        if (res.ok) {
+          const data = await res.json();
+          if (isMounted && data.success && Array.isArray(data.facilities)) {
+            setFacilitiesList(data.facilities);
+          }
+        }
+      } catch (e) {
+        console.error("Failed to load facilities", e);
+      } finally {
+        if (isMounted) setIsLoadingFacilities(false);
+      }
     }
-    const blocks = INDIAN_STATES_AND_BLOCKS[presentState] || [];
-    if (blocks.length > 0 && !blocks.includes(presentBlock)) {
-      setPresentBlock(blocks[0]);
+    loadFacilities();
+    return () => {
+      isMounted = false;
+    };
+  }, []);
+
+  // Cascading Address Dropdowns: State -> District -> Block
+  const handleStateChange = (newState: string) => {
+    setPresentState(newState);
+    setPresentDistrict("");
+    setPresentBlock("");
+    setSelectedFacilityId("");
+    setSelectedFacilityName("");
+  };
+
+  const handleDistrictChange = (newDistrict: string) => {
+    setPresentDistrict(newDistrict);
+    setPresentBlock("");
+    setSelectedFacilityId("");
+    setSelectedFacilityName("");
+  };
+
+  const handleBlockChange = (newBlock: string) => {
+    setPresentBlock(newBlock);
+    setSelectedFacilityId("");
+    setSelectedFacilityName("");
+  };
+
+  // Helper to normalize strings for comparison (removes punctuation, spaces, lowercase)
+  const cleanStr = (s?: string) => (s || "").replace(/[^a-zA-Z0-9]/g, "").toLowerCase();
+
+  // STRICT facility filter: ONLY facilities matching the chosen state, district and block
+  const addressFilteredFacilities = useMemo(() => {
+    if (!presentState || !presentDistrict) return [];
+
+    const stateClean = cleanStr(presentState);
+    const distClean = cleanStr(presentDistrict);
+    const blockClean = cleanStr(presentBlock);
+
+    // Strictly match state and district
+    const inDistrict = facilitiesList.filter((f) => {
+      return cleanStr(f.state) === stateClean && cleanStr(f.district) === distClean;
+    });
+
+    if (!presentBlock) {
+      return inDistrict;
     }
-  }, [presentState, presentDistrict, presentBlock]);
+
+    // If block is specified, strictly filter to facilities matching that block
+    const inBlock = inDistrict.filter((f) => cleanStr(f.block) === blockClean);
+
+    // Return block matches if available; otherwise return facilities in the district
+    return inBlock.length > 0 ? inBlock : inDistrict;
+  }, [facilitiesList, presentState, presentDistrict, presentBlock]);
+
+  // If selected facility does not belong to the newly chosen address, clear selection
+  useEffect(() => {
+    if (!selectedFacilityId) return;
+    const stillValid = addressFilteredFacilities.some((f) => f.id === selectedFacilityId);
+    if (!stillValid) {
+      setSelectedFacilityId("");
+      setSelectedFacilityName("");
+    }
+  }, [addressFilteredFacilities, selectedFacilityId]);
 
   // Continuous Voice Dictation Handlers (Prevents sudden browser timeouts & silence stops)
   const stopVoiceDictation = () => {
@@ -774,13 +746,16 @@ function PatientReportSymptomsForm() {
       patient_age: effectivePatientAge,
       patient_gender: effectivePatientGender,
       patient_relation: effectiveRelation,
-      reported_by: user?.fullName || "Bikash Kumar Choudhury",
+      reported_by: user?.fullName || "Patient",
       language: selectedLanguage,
       symptoms: extractedSymptoms,
       timeline: timeline,
       follow_up_answers: followUpAnswers,
       report_data: uploadedReport && ocrData ? { ...ocrData, file_name: uploadedReport.fileName } : null,
       report_answers: reportInquiryAnswers,
+      facility_id: selectedFacilityId || null,
+      medical_id: selectedFacilityId || null,
+      facility_name: selectedFacilityName || null,
       present_state: presentState,
       present_district: presentDistrict,
       present_block: presentBlock,
@@ -788,9 +763,9 @@ function PatientReportSymptomsForm() {
         state: presentState,
         district: presentDistrict,
         block: presentBlock,
-        landmark: landmark,
+        facility_id: selectedFacilityId || null,
+        facility_name: selectedFacilityName || null,
       },
-      landmark: landmark,
       consent: consentChecked,
       consultation_mode: isOnlineTeleconsult ? "online" : "offline"
     };
@@ -861,13 +836,16 @@ function PatientReportSymptomsForm() {
       patient_age: effectivePatientAge,
       patient_gender: effectivePatientGender,
       patient_relation: effectiveRelation,
-      reported_by: user?.fullName || "Bikash Kumar Choudhury",
+      reported_by: user?.fullName || "Patient",
       language: selectedLanguage,
       symptoms: extractedSymptoms.length > 0 ? extractedSymptoms : (symptomText ? [symptomText] : ["General symptoms intake"]),
       timeline: timeline,
       follow_up_answers: followUpAnswers,
       report_data: uploadedReport && ocrData ? { ...ocrData, file_name: uploadedReport.fileName } : null,
       report_answers: reportInquiryAnswers,
+      facility_id: selectedFacilityId || null,
+      medical_id: selectedFacilityId || null,
+      facility_name: selectedFacilityName || null,
       present_state: presentState,
       present_district: presentDistrict,
       present_block: presentBlock,
@@ -875,9 +853,9 @@ function PatientReportSymptomsForm() {
         state: presentState,
         district: presentDistrict,
         block: presentBlock,
-        landmark: landmark,
+        facility_id: selectedFacilityId || null,
+        facility_name: selectedFacilityName || null,
       },
-      landmark: landmark,
       consent: Boolean(consentChecked),
       consultation_mode: isOnlineTeleconsult ? "online" : "offline",
       status: "Draft",
@@ -951,11 +929,7 @@ function PatientReportSymptomsForm() {
       {/* Top Header & Healthcare Navigation */}
       <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 border-b border-slate-200 pb-4">
         <div>
-          <div className="inline-flex items-center gap-2 px-3 py-1 rounded-full text-xs font-bold bg-teal-50 text-teal-800 border border-teal-200">
-            <Radio className="w-3.5 h-3.5 text-teal-600 animate-pulse" />
-            <span>AI Clinical Intake &bull; Hugging Face Qwen2.5 Powered</span>
-          </div>
-          <h1 className="text-2xl sm:text-3xl font-black text-slate-900 tracking-tight mt-1.5">
+          <h1 className="text-2xl sm:text-3xl font-black text-slate-900 tracking-tight">
             Report Your Symptoms
           </h1>
           <p className="text-xs sm:text-sm text-slate-600 mt-0.5">
@@ -964,19 +938,6 @@ function PatientReportSymptomsForm() {
         </div>
 
         <div className="flex flex-col sm:items-end gap-2.5">
-          {!submittedTicket && (
-            <button
-              type="button"
-              onClick={handleSaveDraft}
-              disabled={isSavingDraft || isSubmitting}
-              className="inline-flex items-center gap-1.5 px-3.5 py-1.5 rounded-xl border border-slate-300 bg-white hover:bg-slate-50 text-slate-700 text-xs font-bold transition-all shadow-2xs cursor-pointer self-start sm:self-auto disabled:opacity-50"
-              title="Save current symptom details as a draft"
-            >
-              <FileText className="w-3.5 h-3.5 text-slate-500" />
-              <span>{isSavingDraft ? "Saving Draft..." : "Save to Draft"}</span>
-            </button>
-          )}
-
           {/* Step Indicator Badges with Step-by-Step Arrow Marks */}
           <div className="flex items-center gap-1.5 sm:gap-2 text-xs font-sans overflow-x-auto py-1">
             {[
@@ -1110,7 +1071,13 @@ function PatientReportSymptomsForm() {
             </span>
             <div className="text-slate-900 font-extrabold text-sm sm:text-base flex items-center gap-2.5">
               <Building2 className="w-4.5 h-4.5 text-teal-700 shrink-0" />
-              <span>{submittedTicket.assigned_facility || `PHC ${presentBlock} Emergency & Clinical Desk`}</span>
+              <span>
+                {selectedFacilityName ||
+                  submittedTicket.facility_name ||
+                  submittedTicket.assigned_facility ||
+                  submittedTicket.ticket?.present_address?.facility_name ||
+                  (presentBlock ? `PHC ${presentBlock} Emergency & Clinical Desk` : "Designated Health Facility")}
+              </span>
             </div>
           </div>
 
@@ -1248,7 +1215,7 @@ function PatientReportSymptomsForm() {
                     >
                       <optgroup label="Primary Patient">
                         <option value="self">
-                          Myself — {user?.fullName || "Bikash Kumar Choudhury"} (Self • {user?.age || 22} yrs, {user?.gender || "Male"})
+                          Myself — {user?.fullName || "Primary Account Holder"} (Self • {user?.age || 22} yrs, {user?.gender || "Male"})
                         </option>
                       </optgroup>
                       <optgroup label="Family Dependents">
@@ -2051,18 +2018,13 @@ function PatientReportSymptomsForm() {
           {/* ========================================================================= */}
           {step === 3 && (
             <div className="bg-white rounded-3xl border border-slate-200/90 shadow-xs p-6 sm:p-8 space-y-6 text-slate-900">
-              <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 border-b border-slate-100 pb-3">
-                <div>
-                  <h2 className="text-lg sm:text-xl font-extrabold text-slate-900">
-                    Medical Reports &amp; Laboratory OCR
-                  </h2>
-                  <p className="text-xs text-slate-500 mt-0.5">
-                    Upload blood tests, prescriptions, or imaging reports. Questions are generated dynamically by correlating your report with previous symptoms following eSanjeevani teleconsultation standards.
-                  </p>
-                </div>
-                <span className="text-xs font-bold text-teal-800 bg-teal-50 border border-teal-200 px-3 py-1 rounded-full self-start sm:self-auto">
-                  Qwen2.5-VL Clinical Vision Engine
-                </span>
+              <div className="border-b border-slate-100 pb-3">
+                <h2 className="text-lg sm:text-xl font-extrabold text-slate-900">
+                  Medical Reports &amp; Laboratory OCR (Optional)
+                </h2>
+                <p className="text-xs text-slate-500 mt-0.5">
+                  Upload blood tests, prescriptions, or imaging reports. Questions are generated dynamically by correlating your report with previous symptoms following eSanjeevani teleconsultation standards.
+                </p>
               </div>
 
               {/* Scanning in progress loader */}
@@ -2149,30 +2111,7 @@ function PatientReportSymptomsForm() {
                     </div>
                   </div>
 
-                  {/* Informational eSanjeevani Note & Skip Option */}
-                  <div className="p-4 bg-emerald-50/70 border border-emerald-200 rounded-2xl flex flex-col sm:flex-row sm:items-center justify-between gap-3 text-xs">
-                    <div className="flex items-start gap-2.5">
-                      <ShieldCheck className="w-5 h-5 text-emerald-700 shrink-0 mt-0.5" />
-                      <div>
-                        <strong className="text-emerald-950 font-bold block">
-                          eSanjeevani Telemedicine Note
-                        </strong>
-                        <p className="text-emerald-900/80 text-[11px] leading-relaxed">
-                          Medical reports are optional. If you do not have diagnostic reports available right now, you can skip this step and proceed directly to address routing.
-                        </p>
-                      </div>
-                    </div>
-                    <button
-                      type="button"
-                      onClick={() => {
-                        setStep(4);
-                        window.scrollTo({ top: 0, behavior: "smooth" });
-                      }}
-                      className="px-4 py-2 bg-white border border-emerald-300 text-emerald-900 font-bold rounded-xl hover:bg-emerald-100/60 transition-all cursor-pointer shrink-0 shadow-2xs"
-                    >
-                      I have no report &bull; Skip to Address &rarr;
-                    </button>
-                  </div>
+
                 </div>
               )}
 
@@ -2418,9 +2357,6 @@ function PatientReportSymptomsForm() {
                     Select your current location to automatically route this case to your local PHC/CHC health station.
                   </p>
                 </div>
-                <span className="text-xs font-bold text-emerald-800 bg-emerald-50 border border-emerald-200 px-3 py-1 rounded-full self-start sm:self-auto">
-                  PHC Facility Dispatch
-                </span>
               </div>
 
               <div className="border border-slate-200 rounded-2xl p-5 sm:p-6 bg-slate-50/70 space-y-4 text-xs">
@@ -2432,10 +2368,11 @@ function PatientReportSymptomsForm() {
                   <div className="relative">
                     <select
                       value={presentState}
-                      onChange={(e) => setPresentState(e.target.value)}
+                      onChange={(e) => handleStateChange(e.target.value)}
                       className="w-full h-11 px-3.5 bg-white border border-slate-200 rounded-xl text-slate-800 font-bold text-xs sm:text-sm focus:ring-2 focus:ring-teal-700/20 focus:border-teal-700 cursor-pointer appearance-none shadow-2xs"
                     >
-                      {Object.keys(INDIAN_STATES_AND_BLOCKS).map((st) => (
+                      <option value="">-- Select State --</option>
+                      {getIndiaStates().map((st) => (
                         <option key={st} value={st}>
                           {st}
                         </option>
@@ -2453,14 +2390,19 @@ function PatientReportSymptomsForm() {
                   <div className="relative">
                     <select
                       value={presentDistrict}
-                      onChange={(e) => setPresentDistrict(e.target.value)}
-                      className="w-full h-11 px-3.5 bg-white border border-slate-200 rounded-xl text-slate-800 font-bold text-xs sm:text-sm focus:ring-2 focus:ring-teal-700/20 focus:border-teal-700 cursor-pointer appearance-none shadow-2xs"
+                      onChange={(e) => handleDistrictChange(e.target.value)}
+                      disabled={!presentState}
+                      className="w-full h-11 px-3.5 bg-white border border-slate-200 rounded-xl text-slate-800 font-bold text-xs sm:text-sm focus:ring-2 focus:ring-teal-700/20 focus:border-teal-700 cursor-pointer appearance-none shadow-2xs disabled:bg-slate-100 disabled:text-slate-400 disabled:cursor-not-allowed"
                     >
-                      {(INDIAN_STATES_AND_DISTRICTS[presentState] || [presentDistrict]).map((dist) => (
-                        <option key={dist} value={dist}>
-                          {dist}
-                        </option>
-                      ))}
+                      <option value="">
+                        {presentState ? "-- Select District --" : "-- Select State First --"}
+                      </option>
+                      {presentState &&
+                        getDistrictsForState(presentState).map((dist) => (
+                          <option key={dist} value={dist}>
+                            {dist}
+                          </option>
+                        ))}
                     </select>
                     <ChevronDown className="w-4 h-4 text-slate-400 absolute right-3.5 top-3.5 pointer-events-none" />
                   </div>
@@ -2474,43 +2416,104 @@ function PatientReportSymptomsForm() {
                   <div className="relative">
                     <select
                       value={presentBlock}
-                      onChange={(e) => setPresentBlock(e.target.value)}
-                      className="w-full h-11 px-3.5 bg-white border border-slate-200 rounded-xl text-slate-800 font-bold text-xs sm:text-sm focus:ring-2 focus:ring-teal-700/20 focus:border-teal-700 cursor-pointer appearance-none shadow-2xs"
+                      onChange={(e) => handleBlockChange(e.target.value)}
+                      disabled={!presentDistrict}
+                      className="w-full h-11 px-3.5 bg-white border border-slate-200 rounded-xl text-slate-800 font-bold text-xs sm:text-sm focus:ring-2 focus:ring-teal-700/20 focus:border-teal-700 cursor-pointer appearance-none shadow-2xs disabled:bg-slate-100 disabled:text-slate-400 disabled:cursor-not-allowed"
                     >
-                      {(INDIAN_STATES_AND_BLOCKS[presentState] || []).map((blk) => (
-                        <option key={blk} value={blk}>
-                          {blk}
-                        </option>
-                      ))}
+                      <option value="">
+                        {presentDistrict ? "-- Select Block / Sub-District --" : "-- Select District First --"}
+                      </option>
+                      {presentDistrict &&
+                        getBlocksForDistrict(presentState, presentDistrict).map((blk) => (
+                          <option key={blk} value={blk}>
+                            {blk}
+                          </option>
+                        ))}
                     </select>
                     <ChevronDown className="w-4 h-4 text-slate-400 absolute right-3.5 top-3.5 pointer-events-none" />
                   </div>
                 </div>
 
-                {/* Landmark or local area */}
+                {/* Facility Selection */}
                 <div className="space-y-1.5 pt-1">
                   <label className="text-slate-800 font-bold block">
-                    Street / Village / Landmark
+                    Choose Designated Health Facility *
                   </label>
-                  <input
-                    type="text"
-                    value={landmark}
-                    onChange={(e) => setLandmark(e.target.value)}
-                    placeholder="e.g. Near Community Health Centre, Post Office Road"
-                    className="w-full h-11 px-3.5 bg-white border border-slate-200 rounded-xl text-slate-900 text-xs sm:text-sm focus:ring-2 focus:ring-teal-700/20 focus:border-teal-700 shadow-2xs"
-                  />
+                  <div className="relative">
+                    <select
+                      value={selectedFacilityId}
+                      onChange={(e) => {
+                        const id = e.target.value;
+                        setSelectedFacilityId(id);
+                        const fac = addressFilteredFacilities.find((f) => f.id === id);
+                        setSelectedFacilityName(fac ? fac.facility_name : "");
+                      }}
+                      disabled={!presentState || !presentDistrict}
+                      className="w-full h-11 px-3.5 bg-white border border-slate-200 rounded-xl text-slate-800 font-bold text-xs sm:text-sm focus:ring-2 focus:ring-teal-700/20 focus:border-teal-700 cursor-pointer appearance-none shadow-2xs disabled:bg-slate-100 disabled:text-slate-400 disabled:cursor-not-allowed"
+                    >
+                      {!presentState || !presentDistrict ? (
+                        <option value="">-- Please Select State &amp; District First --</option>
+                      ) : addressFilteredFacilities.length === 0 ? (
+                        <option value="">
+                          No facilities registered under {presentBlock ? `${presentBlock}, ` : ""}{presentDistrict}
+                        </option>
+                      ) : (
+                        <>
+                          <option value="">-- Select Designated Health Facility --</option>
+                          {addressFilteredFacilities.map((fac) => (
+                            <option key={fac.id} value={fac.id}>
+                              {fac.facility_name} ({fac.block || fac.district || "Health Centre"})
+                            </option>
+                          ))}
+                        </>
+                      )}
+                    </select>
+                    <ChevronDown className="w-4 h-4 text-slate-400 absolute right-3.5 top-3.5 pointer-events-none" />
+                  </div>
+                  <p className="text-[11px] text-slate-500">
+                    Showing only health facilities registered under your selected address.
+                  </p>
                 </div>
 
                 {/* Designated Facility routing preview */}
-                <div className="p-4 bg-emerald-50 rounded-xl border border-emerald-200 text-xs text-emerald-900 flex items-center gap-3">
-                  <MapPin className="w-5 h-5 text-emerald-700 shrink-0" />
-                  <div>
-                    <span className="text-slate-600 block text-[11px]">Designated Clinical Facility:</span>
-                    <strong className="text-slate-900 text-xs sm:text-sm">
-                      PHC {presentBlock} Emergency &amp; Triage Station ({presentDistrict}, {presentState})
-                    </strong>
-                  </div>
-                </div>
+                {(() => {
+                  const selFac = facilitiesList.find((f) => f.id === selectedFacilityId);
+                  if (!selectedFacilityId || !selFac) {
+                    return (
+                      <div className="p-4 bg-slate-100/70 rounded-xl border border-dashed border-slate-300 text-xs text-slate-500 flex items-center gap-3">
+                        <MapPin className="w-5 h-5 text-slate-400 shrink-0" />
+                        <div>
+                          <span className="text-slate-700 block text-[11px] font-bold">
+                            Designated Clinical Facility:
+                          </span>
+                          <span className="text-slate-500">
+                            Please select your State, District, Block, and Designated Facility above.
+                          </span>
+                        </div>
+                      </div>
+                    );
+                  }
+
+                  return (
+                    <div className="p-4 bg-emerald-50 rounded-xl border border-emerald-200 text-xs text-emerald-900 flex items-start gap-3">
+                      <MapPin className="w-5 h-5 text-emerald-700 shrink-0 mt-0.5" />
+                      <div className="space-y-0.5 flex-1">
+                        <span className="text-slate-600 block text-[11px] font-semibold">
+                          Assigned Health Facility &amp; Dispatch Destination:
+                        </span>
+                        <strong className="text-slate-900 text-xs sm:text-sm block font-bold">
+                          {selectedFacilityName || selFac.facility_name}
+                        </strong>
+                        <p className="text-[11px] text-slate-600">
+                          {selFac.address_line1 || (presentBlock ? `${presentBlock}, ${presentDistrict}, ${presentState}` : `${presentDistrict || ""}, ${presentState || ""}`)} &bull;{" "}
+                          <span className="font-semibold text-emerald-800">
+                            {selFac.department || "Emergency & Primary Triage"}
+                          </span>
+                        </p>
+                      </div>
+                    </div>
+                  );
+                })()}
               </div>
 
               {/* Navigation */}
@@ -2600,7 +2603,13 @@ function PatientReportSymptomsForm() {
                     <div>
                       Location:{" "}
                       <strong className="text-slate-900">
-                        {presentBlock}, {presentState}
+                        {[presentBlock, presentDistrict, presentState].filter(Boolean).join(", ") || "Not Specified"}
+                      </strong>
+                    </div>
+                    <div>
+                      Assigned Facility:{" "}
+                      <strong className="text-teal-800">
+                        {selectedFacilityName || "Not Selected"}
                       </strong>
                     </div>
                     <div>

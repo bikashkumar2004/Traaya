@@ -250,10 +250,6 @@ export default function PatientUploadPage() {
 
       {/* Header Banner */}
       <div>
-        <div className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full text-xs font-bold bg-teal-50 text-teal-800 border border-teal-200/80 mb-2">
-          <Sparkles className="w-3.5 h-3.5 text-teal-700" />
-          <span>Patient Medical Report Decoder &amp; Cloud Storage</span>
-        </div>
         <h1 className="text-2xl sm:text-3xl font-black text-slate-900 tracking-tight">
           Upload Reports &amp; View Simplified Summary
         </h1>

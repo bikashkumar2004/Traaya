@@ -33,6 +33,7 @@ export async function POST(req: Request) {
       // Patient specifics
       bloodGroup,
       disability,
+      facilityId,
       primaryFacilityName,
       isAffilatedToOrg,
       organizationName,
@@ -121,7 +122,7 @@ export async function POST(req: Request) {
         await sql`DELETE FROM public.patient_profiles WHERE profile_id = ${extra.id}::uuid`;
         await sql`DELETE FROM public.doctor_profiles WHERE profile_id = ${extra.id}::uuid`;
         await sql`DELETE FROM public.nurse_profiles WHERE profile_id = ${extra.id}::uuid`;
-        await sql`DELETE FROM public.facility_profiles WHERE profile_id = ${extra.id}::uuid`;
+        await sql`DELETE FROM public.facility_profiles WHERE id = ${extra.id}::uuid`;
         await sql`DELETE FROM public.healthcamp_profiles WHERE profile_id = ${extra.id}::uuid`;
         await sql`DELETE FROM public.organization_profiles WHERE profile_id = ${extra.id}::uuid`;
         await sql`DELETE FROM public.profiles WHERE id = ${extra.id}::uuid`;
@@ -255,6 +256,45 @@ export async function POST(req: Request) {
     // 5. Upsert role-specific profile details
     let roleDetails: any = null;
 
+    // Resolve facility ID if provided or find matching registered facility in profiles
+    let resolvedFacilityId: string | null = null;
+    let resolvedFacilityName: string = primaryFacilityName || "";
+
+    if (facilityId && typeof facilityId === "string" && facilityId.trim()) {
+      try {
+        const [f] = await sql`
+          SELECT id, full_name, user_id FROM public.profiles
+          WHERE id = ${facilityId.trim()}::uuid
+          LIMIT 1
+        `;
+        if (f) {
+          resolvedFacilityId = f.id;
+          resolvedFacilityName = f.full_name || resolvedFacilityName;
+        }
+      } catch (err) {
+        console.warn("Invalid facilityId uuid lookup:", err);
+      }
+    }
+
+    if (!resolvedFacilityId && resolvedFacilityName) {
+      const trimmedFac = resolvedFacilityName.trim();
+      const [f] = await sql`
+        SELECT id, full_name, user_id FROM public.profiles
+        WHERE role IN ('facility', 'medical')
+          AND (
+            user_id ILIKE ${trimmedFac}
+            OR full_name ILIKE ${trimmedFac}
+            OR ${trimmedFac} ILIKE ('%' || full_name || '%')
+            OR id::text = ${trimmedFac}
+          )
+        LIMIT 1
+      `;
+      if (f) {
+        resolvedFacilityId = f.id;
+        resolvedFacilityName = f.full_name || resolvedFacilityName;
+      }
+    }
+
     if (assignedRole === "patient") {
       const [p] = await sql`
         INSERT INTO public.patient_profiles (
@@ -266,7 +306,7 @@ export async function POST(req: Request) {
           ${targetUserId}::uuid,
           ${bloodGroup || "B+"}::text,
           ${disability || "No"}::text,
-          ${primaryFacilityName || "Community Health Centre (CHC) Khandapada"}::text,
+          ${resolvedFacilityName || primaryFacilityName || "Community Health Centre (CHC) Khandapada"}::text,
           ${Boolean(isAffilatedToOrg)},
           ${organizationName || null}::text,
           ${idInOrg || null}::text,
@@ -296,38 +336,57 @@ export async function POST(req: Request) {
       `;
       roleDetails = p;
     } else if (assignedRole === "doctor") {
+      const regNo = medicalRegistrationNumber || stateCouncilReg || `MCI-OD-${Math.floor(2010 + Math.random() * 14)}-${Math.floor(1000 + Math.random() * 9000)}`;
+      const stateCouncilRegVal = stateCouncilReg || regNo;
+      const hprIdVal = hprId || `91-${Math.floor(1000 + Math.random() * 9000)}-${Math.floor(1000 + Math.random() * 9000)}-4402@hpr`;
+      const doctorDesig = designation || specialization || "Senior Attending Physician & Clinical Specialist";
+      const shiftScheduleVal = shiftSchedule || shiftTimings || "Morning OPD (08:00 AM - 02:00 PM)";
+
       const [d] = await sql`
         INSERT INTO public.doctor_profiles (
-          profile_id, doctor_id, medical_registration_number, specialization,
-          qualification, department, room_number, facility_name,
-          shift_timings, availability_status, is_authorized_reviewer, active_cases_count,
-          updated_at
+          profile_id, medical_registration_number, state_council_reg, hpr_id,
+          designation, qualification, department, room_number,
+          facility_id, facility_name,
+          shift_schedule, availability_status, aadhaar_ekyc_verified,
+          active_cases_count, emergency_referrals_count, complete_cases_count, teleconsult_count,
+          metadata, updated_at
         ) VALUES (
           ${targetUserId}::uuid,
-          ${computedUserId}::text,
-          ${medicalRegistrationNumber || `MCI-OD-${Math.floor(2010 + Math.random() * 14)}-${Math.floor(1000 + Math.random() * 9000)}`}::text,
-          ${specialization || "General Medicine & Triage Specialist"}::text,
+          ${regNo}::text,
+          ${stateCouncilRegVal}::text,
+          ${hprIdVal}::text,
+          ${doctorDesig}::text,
           ${qualification || "MBBS, MD"}::text,
           ${department || "Department of Medicine"}::text,
           ${roomNumber || "OPD Room 102"}::text,
-          ${primaryFacilityName || "Community Health Centre (CHC) Khandapada"}::text,
-          ${shiftTimings || "08:00 AM - 02:00 PM"}::text,
+          ${resolvedFacilityId || null}::uuid,
+          ${resolvedFacilityName || primaryFacilityName || "Community Health Centre (CHC) Khandapada"}::text,
+          ${shiftScheduleVal}::text,
           ${availabilityStatus || "Available"}::text,
-          ${isAuthorizedReviewer !== false},
+          true,
           0,
+          0,
+          0,
+          0,
+          ${JSON.stringify({
+            specialization: specialization || doctorDesig,
+            is_authorized_reviewer: isAuthorizedReviewer !== false,
+          })}::jsonb,
           now()
         )
         ON CONFLICT (profile_id) DO UPDATE SET
-          doctor_id = EXCLUDED.doctor_id,
           medical_registration_number = EXCLUDED.medical_registration_number,
-          specialization = EXCLUDED.specialization,
+          state_council_reg = EXCLUDED.state_council_reg,
+          hpr_id = EXCLUDED.hpr_id,
+          designation = EXCLUDED.designation,
           qualification = EXCLUDED.qualification,
           department = EXCLUDED.department,
           room_number = EXCLUDED.room_number,
+          facility_id = EXCLUDED.facility_id,
           facility_name = EXCLUDED.facility_name,
-          shift_timings = EXCLUDED.shift_timings,
+          shift_schedule = EXCLUDED.shift_schedule,
           availability_status = EXCLUDED.availability_status,
-          is_authorized_reviewer = EXCLUDED.is_authorized_reviewer,
+          metadata = COALESCE(public.doctor_profiles.metadata, '{}'::jsonb) || EXCLUDED.metadata,
           updated_at = now()
         RETURNING *
       `;
@@ -336,7 +395,7 @@ export async function POST(req: Request) {
       const [n] = await sql`
         INSERT INTO public.nurse_profiles (
           profile_id, state_council_reg, hpr_id, designation,
-          facility_name, shift_schedule, aadhaar_ekyc_verified,
+          facility_id, facility_name, shift_schedule, aadhaar_ekyc_verified,
           cases_triaged_count, doctor_handoffs_count, emergency_referrals_count,
           resolved_by_me_count, updated_at
         ) VALUES (
@@ -344,7 +403,8 @@ export async function POST(req: Request) {
           ${stateCouncilReg || `ONRC-${Math.floor(2015 + Math.random() * 9)}-${Math.floor(1000 + Math.random() * 9000)}`}::text,
           ${hprId || `91-${Math.floor(1000 + Math.random() * 9000)}-${Math.floor(1000 + Math.random() * 9000)}-2011@hpr`}::text,
           ${designation || "Senior Staff Nurse & Triage Specialist"}::text,
-          ${primaryFacilityName || "Community Health Centre (CHC) Khandapada"}::text,
+          ${resolvedFacilityId || null}::uuid,
+          ${resolvedFacilityName || primaryFacilityName || "Community Health Centre (CHC) Khandapada"}::text,
           ${shiftSchedule || "Morning Roster (08:00 AM - 04:00 PM)"}::text,
           true,
           0, 0, 0, 0,
@@ -354,6 +414,7 @@ export async function POST(req: Request) {
           state_council_reg = EXCLUDED.state_council_reg,
           hpr_id = EXCLUDED.hpr_id,
           designation = EXCLUDED.designation,
+          facility_id = EXCLUDED.facility_id,
           facility_name = EXCLUDED.facility_name,
           shift_schedule = EXCLUDED.shift_schedule,
           updated_at = now()
@@ -363,28 +424,17 @@ export async function POST(req: Request) {
     } else if (assignedRole === "facility" || assignedRole === "medical") {
       const [m] = await sql`
         INSERT INTO public.facility_profiles (
-          profile_id, staff_id, pharmacy_license_number, department,
-          staff_designation, facility_name, counter_number, is_jan_aushadhi_incharge,
-          updated_at
+          id, profile_id, hpr_id, department, updated_at
         ) VALUES (
           ${targetUserId}::uuid,
-          ${computedUserId}::text,
-          ${pharmacyLicenseNumber || `DL-OD-NAY-${Math.floor(2020 + Math.random() * 5)}-${Math.floor(100 + Math.random() * 900)}`}::text,
+          ${targetUserId}::uuid,
+          ${hprId || null}::text,
           ${department || "Central Pharmacy & Pathology Counter"}::text,
-          ${staffDesignation || "Registered Pharmacist & Dispensary Incharge"}::text,
-          ${primaryFacilityName || "Jan Aushadhi Kendra & CHC Pathology Counter"}::text,
-          ${counterNumber || "Dispensary Desk 1"}::text,
-          ${isJanAushadhiIncharge !== false},
           now()
         )
         ON CONFLICT (profile_id) DO UPDATE SET
-          staff_id = EXCLUDED.staff_id,
-          pharmacy_license_number = EXCLUDED.pharmacy_license_number,
+          hpr_id = EXCLUDED.hpr_id,
           department = EXCLUDED.department,
-          staff_designation = EXCLUDED.staff_designation,
-          facility_name = EXCLUDED.facility_name,
-          counter_number = EXCLUDED.counter_number,
-          is_jan_aushadhi_incharge = EXCLUDED.is_jan_aushadhi_incharge,
           updated_at = now()
         RETURNING *
       `;

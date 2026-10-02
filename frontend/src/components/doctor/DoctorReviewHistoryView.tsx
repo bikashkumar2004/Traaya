@@ -1,6 +1,8 @@
 "use client";
 
-import React, { useState } from "react";
+import React, { useState, useEffect } from "react";
+import { useAuth } from "@/lib/auth-context";
+import { submitLiveNurseAction, fetchRegisteredFacilities, RegisteredFacilityOption } from "@/lib/nurse-api";
 import { CaseDetails } from "@/components/nurse/CaseReviewWorkspace";
 import {
   History,
@@ -25,7 +27,8 @@ import {
   X,
   HeartPulse,
   Sparkles,
-  Check
+  Check,
+  Languages
 } from "lucide-react";
 
 export interface ReviewedCaseRecord extends CaseDetails {
@@ -39,24 +42,19 @@ export interface ReviewedCaseRecord extends CaseDetails {
 
 interface DoctorReviewHistoryViewProps {
   reviewedCases: ReviewedCaseRecord[];
+  currentDoctorId?: string;
   onSelectCase?: (caseItem: CaseDetails) => void;
   onUpdateCase?: (updatedCase: ReviewedCaseRecord) => void;
 }
 
 export function resolveCategory(c: ReviewedCaseRecord): string {
-  if (c.category) return c.category;
-  const s = `${c.status || ""} ${c.doctorDecision || ""}`.toLowerCase();
-  if (s.includes("under review") || s.includes("triage approved") || s.includes("confirm triage") || s.includes("ward") || s.includes("admit") || s.includes("observation")) {
-    return "Under Review";
-  }
-  if (s.includes("complete") || s.includes("prescription") || s.includes("rx")) {
+  if (c.category) {
+    if (c.category.toLowerCase().includes("refer")) return "Referred";
     return "Complete";
   }
+  const s = `${c.status || ""} ${c.doctorDecision || ""}`.toLowerCase();
   if (s.includes("refer")) {
     return "Referred";
-  }
-  if (s.includes("teleconsult") || s.includes("video")) {
-    return "Teleconsultation";
   }
   return "Complete";
 }
@@ -145,26 +143,12 @@ function getPriorityConfig(urgency?: string, urgencyClass?: string, aiPriority?:
     };
   }
 
-  // 2. Less Urgent
+  // 2. Urgent / Yellow Priority
   if (
-    combined.includes("less urgent") ||
-    combined.includes("green") ||
-    combined.includes("routine") ||
-    combined.includes("low")
-  ) {
-    return {
-      label: "Less Urgent",
-      badgeClass: "bg-emerald-50 text-emerald-900 border-emerald-300",
-      iconClass: "text-emerald-600",
-      icon: CheckCircle2,
-    };
-  }
-
-  // 3. Urgent
-  if (
-    combined.includes("urgent") ||
     combined.includes("yellow") ||
-    combined.includes("priority") ||
+    (combined.includes("urgent") && !combined.includes("less urgent")) ||
+    combined.includes("priority 2") ||
+    combined.includes("priority 3") ||
     combined.includes("moderate") ||
     combined.includes("medium")
   ) {
@@ -176,11 +160,27 @@ function getPriorityConfig(urgency?: string, urgencyClass?: string, aiPriority?:
     };
   }
 
+  // 3. Less Urgent / Green Priority
+  if (
+    combined.includes("green") ||
+    combined.includes("less urgent") ||
+    combined.includes("routine") ||
+    combined.includes("non-urgent") ||
+    combined.split(/\s+/).includes("low")
+  ) {
+    return {
+      label: "Less Urgent",
+      badgeClass: "bg-emerald-50 text-emerald-900 border-emerald-300",
+      iconClass: "text-emerald-600",
+      icon: CheckCircle2,
+    };
+  }
+
   return {
-    label: "Less Urgent",
-    badgeClass: "bg-emerald-50 text-emerald-900 border-emerald-300",
-    iconClass: "text-emerald-600",
-    icon: CheckCircle2,
+    label: "Urgent",
+    badgeClass: "bg-amber-50 text-amber-900 border-amber-300",
+    iconClass: "text-amber-600",
+    icon: Clock,
   };
 }
 
@@ -220,9 +220,11 @@ function extractActionDetails(notes?: string) {
 
 export function DoctorReviewHistoryView({
   reviewedCases,
+  currentDoctorId,
   onSelectCase,
   onUpdateCase,
 }: DoctorReviewHistoryViewProps) {
+  const { user } = useAuth();
   const [searchTerm, setSearchTerm] = useState("");
   const [selectedCategory, setSelectedCategory] = useState<string>("All");
   const [selectedCaseToPrint, setSelectedCaseToPrint] = useState<ReviewedCaseRecord | null>(null);
@@ -241,10 +243,35 @@ export function DoctorReviewHistoryView({
   const [checkupMedFrequency, setCheckupMedFrequency] = useState("BD (Twice daily) x 5 days");
   const [checkupAdditionalMed, setCheckupAdditionalMed] = useState("Inj. Tetanus Toxoid 0.5ml IM Stat\nTab Paracetamol 500mg SOS x 3 days");
 
-  // 2. Refer to Hospital dynamic inputs
-  const [checkupReferralHospital, setCheckupReferralHospital] = useState("District Hospital (DH) Nayagarh");
-  const [checkupReferralCustom, setCheckupReferralCustom] = useState("");
+  // 2. Refer to Hospital dynamic inputs strictly from database
+  const [availableFacilities, setAvailableFacilities] = useState<RegisteredFacilityOption[]>([]);
+  const [loadingFacilities, setLoadingFacilities] = useState<boolean>(true);
+  const [checkupReferralFacilityId, setCheckupReferralFacilityId] = useState("");
+  const [checkupReferralHospital, setCheckupReferralHospital] = useState("");
   const [checkupReferralReason, setCheckupReferralReason] = useState("Specialty clinical management and secondary trauma assessment required.");
+
+  useEffect(() => {
+    let isMounted = true;
+    async function loadFacilities() {
+      setLoadingFacilities(true);
+      try {
+        const facs = await fetchRegisteredFacilities();
+        if (isMounted) {
+          setAvailableFacilities(facs);
+          if (facs.length > 0) {
+            setCheckupReferralFacilityId(facs[0].id);
+            setCheckupReferralHospital(facs[0].name);
+          }
+        }
+      } catch (err) {
+        console.warn("[DoctorHistory] Error loading registered facilities:", err);
+      } finally {
+        if (isMounted) setLoadingFacilities(false);
+      }
+    }
+    loadFacilities();
+    return () => { isMounted = false; };
+  }, []);
 
   // 3. Admit to Ward dynamic inputs
   const [checkupWardUnit, setCheckupWardUnit] = useState("Emergency Observation Unit (Bed 04)");
@@ -294,8 +321,20 @@ export function DoctorReviewHistoryView({
         ? "Inj. Tetanus Toxoid 0.5ml IM Stat\nTab Paracetamol 500mg SOS x 3 days"
         : "Tab Cetirizine 10mg OD HS x 5 days"
     );
-    setCheckupReferralHospital("District Hospital (DH) Nayagarh");
-    setCheckupReferralCustom("");
+    if (c.referalFacilityId) {
+      setCheckupReferralFacilityId(c.referalFacilityId);
+      const match = availableFacilities.find((f) => f.id === c.referalFacilityId);
+      if (match) setCheckupReferralHospital(match.name);
+    } else if (c.referalFacility) {
+      const match = availableFacilities.find((f) => f.name.toLowerCase().includes(c.referalFacility!.toLowerCase()));
+      if (match) {
+        setCheckupReferralFacilityId(match.id);
+        setCheckupReferralHospital(match.name);
+      }
+    } else if (availableFacilities.length > 0) {
+      setCheckupReferralFacilityId(availableFacilities[0].id);
+      setCheckupReferralHospital(availableFacilities[0].name);
+    }
     setCheckupReferralReason("Specialty surgical/orthopedic evaluation and secondary care.");
     setCheckupWardUnit("Emergency Observation Unit (Bed 04)");
     setCheckupWardCareNotes("Admit for 24-hour observation, vitals monitoring, and regular antiseptic dressing.");
@@ -336,15 +375,40 @@ export function DoctorReviewHistoryView({
       finalPrescriptions = "";
       finalNotes = `${finalNotes}\n\n[Inpatient Admission]: ${checkupWardUnit}\n[Ward Care Notes]: ${checkupWardCareNotes}`;
     } else if (disposition === "Refer to Hospital") {
-      const destination =
-        checkupReferralHospital === "Other Medical Facility" && checkupReferralCustom.trim()
-          ? checkupReferralCustom.trim()
-          : checkupReferralHospital;
+      const chosenFac = availableFacilities.find((f) => f.id === checkupReferralFacilityId);
+      const destination = chosenFac?.name || checkupReferralHospital || "Referral Medical Facility";
       finalStatus = "Referred";
       finalCategory = "Referred";
       finalDecision = "Refer to Hospital";
       finalPrescriptions = "";
       finalNotes = `${finalNotes}\n\n[Referred Hospital/Facility]: ${destination}\n[Referral Reason]: ${checkupReferralReason}`;
+    }
+
+    const chosenFac = availableFacilities.find((f) => f.id === checkupReferralFacilityId);
+    const destination =
+      disposition === "Refer to Hospital"
+        ? (chosenFac?.name || checkupReferralHospital || "Referral Medical Facility")
+        : undefined;
+
+    const finalFacilityId =
+      disposition === "Refer to Hospital"
+        ? (checkupReferralFacilityId || chosenFac?.id)
+        : undefined;
+
+    // Resolve active doctor profile ID & name
+    let activeDoctorId = user?.id;
+    let activeDoctorName = user?.fullName || selectedCaseToReview.attendingDoctor || "Dr. Ramesh Chandra Mohanty";
+    if (!activeDoctorId && typeof window !== "undefined") {
+      try {
+        const stored = localStorage.getItem("triageassist_user");
+        if (stored) {
+          const parsed = JSON.parse(stored);
+          activeDoctorId = parsed?.id;
+          activeDoctorName = parsed?.fullName || activeDoctorName;
+        }
+      } catch {
+        // ignore
+      }
     }
 
     const updatedCase: ReviewedCaseRecord = {
@@ -355,23 +419,63 @@ export function DoctorReviewHistoryView({
       doctorNotes: finalNotes,
       prescriptions: finalPrescriptions,
       reviewedAt: "Just now (In-person checkup)",
+      attendingDoctor: activeDoctorName,
+      referalFacility: destination || selectedCaseToReview.referalFacility,
+      referalFacilityId: finalFacilityId || selectedCaseToReview.referalFacilityId,
+      transferReason: (disposition === "Refer to Hospital" ? checkupReferralReason : undefined) || selectedCaseToReview.transferReason,
     };
 
     setSelectedCaseToReview(updatedCase);
     onUpdateCase?.(updatedCase);
+
+    // Persist to live Supabase / triage_tickets table with doctor_id and referal_facility_id
+    submitLiveNurseAction({
+      case_number: selectedCaseToReview.id,
+      action_type: finalDecision,
+      review_note: disposition === "Refer to Hospital" ? checkupReferralReason.trim() : finalNotes,
+      target_status: finalStatus,
+      assigned_doctor_name: activeDoctorName,
+      doctor_id: activeDoctorId,
+      doctor_name: activeDoctorName,
+      referal_facility: destination,
+      referral_destination: destination,
+      referal_facility_id: finalFacilityId,
+      transfer_reason: disposition === "Refer to Hospital" ? checkupReferralReason.trim() : undefined,
+    }).catch(() => {});
+
     setIsInPersonModalOpen(false);
     setSuccessToast(`Clinical action recorded: ${finalDecision} for Case ${updatedCase.id}`);
     setTimeout(() => setSuccessToast(null), 4000);
   };
 
-  // Available categories with counts
-  const categories = ["All", "Under Review", "Complete", "Referred"];
+  // Resolve active doctor ID
+  let activeDoctorId = currentDoctorId || user?.id;
+  if (!activeDoctorId && typeof window !== "undefined") {
+    try {
+      const stored = localStorage.getItem("triageassist_user");
+      if (stored) {
+        const parsed = JSON.parse(stored);
+        activeDoctorId = parsed?.id || parsed?.userId;
+      }
+    } catch {}
+  }
+
+  // Strictly filter reviewed cases by activeDoctorId so other doctors' cases are never displayed
+  const doctorCases = reviewedCases.filter((c) => {
+    if (activeDoctorId) {
+      return Boolean(c.doctorId && c.doctorId === activeDoctorId);
+    }
+    return true;
+  });
+
+  // Available categories with counts (All Categories, Complete, Referred)
+  const categories = ["All", "Complete", "Referred"];
   const getCategoryCount = (cat: string) => {
-    if (cat === "All") return reviewedCases.length;
-    return reviewedCases.filter((c) => resolveCategory(c) === cat).length;
+    if (cat === "All") return doctorCases.length;
+    return doctorCases.filter((c) => resolveCategory(c) === cat).length;
   };
 
-  const filteredHistory = reviewedCases.filter((c) => {
+  const filteredHistory = doctorCases.filter((c) => {
     const cat = resolveCategory(c);
     const matchesCategory =
       selectedCategory === "All" || cat.toLowerCase() === selectedCategory.toLowerCase();
@@ -688,35 +792,42 @@ export function DoctorReviewHistoryView({
               </p>
 
               <div className="space-y-1.5">
-                <label className="block text-[11px] font-bold text-slate-800">
-                  Destination Medical / Hospital
-                </label>
+                <div className="flex items-center justify-between">
+                  <label className="block text-[11px] font-bold text-slate-800">
+                    Destination Medical / Hospital
+                  </label>
+                  <span className="text-[10px] font-semibold text-amber-800 bg-amber-100 px-2 py-0.5 rounded-md">
+                    Database Verified Facilities
+                  </span>
+                </div>
                 <select
-                  value={checkupReferralHospital}
-                  onChange={(e) => setCheckupReferralHospital(e.target.value)}
-                  className="w-full px-3 py-2 bg-white border border-amber-300 focus:border-amber-600 rounded-xl text-xs text-slate-800 font-medium outline-hidden cursor-pointer"
+                  value={checkupReferralFacilityId || ""}
+                  onChange={(e) => {
+                    const val = e.target.value;
+                    setCheckupReferralFacilityId(val);
+                    const match = availableFacilities.find((f) => f.id === val);
+                    if (match) setCheckupReferralHospital(match.name);
+                  }}
+                  disabled={loadingFacilities}
+                  className="w-full px-3 py-2 bg-white border border-amber-300 focus:border-amber-600 rounded-xl text-xs text-slate-800 font-medium outline-hidden cursor-pointer disabled:bg-slate-50 disabled:cursor-not-allowed"
                 >
-                  <option value="District Hospital (DH) Nayagarh">District Hospital (DH) Nayagarh</option>
-                  <option value="AIIMS Bhubaneswar (Tertiary Care Super Specialty)">AIIMS Bhubaneswar (Tertiary Care Super Specialty)</option>
-                  <option value="SCB Medical College & Hospital, Cuttack">SCB Medical College &amp; Hospital, Cuttack</option>
-                  <option value="Capital Hospital, Bhubaneswar">Capital Hospital, Bhubaneswar</option>
-                  <option value="Sub-Divisional Hospital (SDH) Banapur">Sub-Divisional Hospital (SDH) Banapur</option>
-                  <option value="CHC Daspalla Secondary Emergency Unit">CHC Daspalla Secondary Emergency Unit</option>
-                  <option value="Other Medical Facility">Other Medical Center / Hospital...</option>
+                  {loadingFacilities ? (
+                    <option value="">Loading facilities from database...</option>
+                  ) : availableFacilities.length > 0 ? (
+                    availableFacilities.map((fac) => {
+                      const locParts = [fac.block, fac.district, fac.state].filter(Boolean);
+                      const locText = locParts.length ? ` — ${locParts.join(", ")}` : "";
+                      return (
+                        <option key={fac.id} value={fac.id}>
+                          {fac.name}{locText}
+                        </option>
+                      );
+                    })
+                  ) : (
+                    <option value="" disabled>No registered facilities found in database</option>
+                  )}
                 </select>
               </div>
-
-              {checkupReferralHospital === "Other Medical Facility" && (
-                <div>
-                  <input
-                    type="text"
-                    value={checkupReferralCustom}
-                    onChange={(e) => setCheckupReferralCustom(e.target.value)}
-                    placeholder="Enter custom hospital or clinic name..."
-                    className="w-full px-3 py-2 bg-white border border-amber-300 focus:border-amber-600 rounded-xl text-xs text-slate-800 font-medium outline-hidden"
-                  />
-                </div>
-              )}
 
               <div className="space-y-1">
                 <label className="block text-[11px] font-bold text-slate-800">
@@ -1486,22 +1597,75 @@ export function DoctorReviewHistoryView({
       {/* Top Header (no box) */}
       <div className="flex flex-col md:flex-row md:items-center justify-between gap-4">
         <div>
-          <div className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full text-xs font-bold bg-teal-50 text-teal-800 border border-teal-200/80 mb-2">
-            <span className="w-2 h-2 rounded-full bg-teal-600 animate-pulse" />
-            <span>Physician Audit Log &bull; Completed Reviews</span>
-          </div>
           <h1 className="text-2xl sm:text-3xl font-black text-slate-900 tracking-tight flex items-center gap-2">
             <span>Review History &bull; Completed Actions</span>
           </h1>
           <p className="text-xs sm:text-sm text-slate-600 mt-1 max-w-2xl leading-relaxed">
-            Clinical audit log categorized by workflow: <strong>Under Review</strong> (Triage Approved), <strong>Complete</strong> (e-Prescription), and <strong>Referred</strong>.
+            Clinical audit log categorized by workflow: <strong>Complete</strong> (Discharge &amp; e-Prescription) and <strong>Referred</strong> (Hospital Transfer).
           </p>
         </div>
 
         <div className="flex items-center gap-2 text-xs font-bold text-slate-500 shrink-0">
           <span className="px-3.5 py-2 rounded-xl bg-white border border-slate-200 shadow-2xs">
-            Total Completed: <strong className="text-teal-800">{reviewedCases.length}</strong>
+            Total Completed: <strong className="text-teal-800">{doctorCases.length}</strong>
           </span>
+        </div>
+      </div>
+
+      {/* 3 Metric Cards for All Categories, Complete, Referred (matching Review Queue page design) */}
+      <div className="grid grid-cols-1 sm:grid-cols-3 gap-3.5">
+        {/* All Categories Card */}
+        <div
+          onClick={() => setSelectedCategory("All")}
+          className={`bg-white p-5 rounded-2xl border transition-all cursor-pointer shadow-xs ${
+            selectedCategory === "All"
+              ? "border-slate-800 ring-2 ring-slate-100"
+              : "border-slate-200 hover:border-slate-300 hover:shadow-sm"
+          }`}
+        >
+          <span className="text-xs text-slate-500 font-medium">All Categories</span>
+          <div className="text-2xl sm:text-3xl font-black text-slate-900 mt-1.5 tabular-nums">
+            {doctorCases.length}
+          </div>
+          <div className="text-[11px] text-teal-700 font-medium mt-1">
+            Total reviewed &amp; completed
+          </div>
+        </div>
+
+        {/* Complete Card */}
+        <div
+          onClick={() => setSelectedCategory(selectedCategory === "Complete" ? "All" : "Complete")}
+          className={`bg-white p-5 rounded-2xl border transition-all cursor-pointer shadow-xs ${
+            selectedCategory === "Complete"
+              ? "border-emerald-500 ring-2 ring-emerald-100"
+              : "border-slate-200 hover:border-emerald-300 hover:shadow-sm"
+          }`}
+        >
+          <span className="text-xs text-slate-500 font-medium">Complete</span>
+          <div className="text-2xl sm:text-3xl font-black text-emerald-800 mt-1.5 tabular-nums">
+            {getCategoryCount("Complete")}
+          </div>
+          <div className="text-[11px] text-emerald-700 font-medium mt-1">
+            Discharge &amp; e-Prescription
+          </div>
+        </div>
+
+        {/* Referred Card */}
+        <div
+          onClick={() => setSelectedCategory(selectedCategory === "Referred" ? "All" : "Referred")}
+          className={`bg-white p-5 rounded-2xl border transition-all cursor-pointer shadow-xs ${
+            selectedCategory === "Referred"
+              ? "border-indigo-500 ring-2 ring-indigo-100"
+              : "border-slate-200 hover:border-indigo-300 hover:shadow-sm"
+          }`}
+        >
+          <span className="text-xs text-slate-500 font-medium">Referred</span>
+          <div className="text-2xl sm:text-3xl font-black text-indigo-700 mt-1.5 tabular-nums">
+            {getCategoryCount("Referred")}
+          </div>
+          <div className="text-[11px] text-indigo-700 font-medium mt-1">
+            Transferred to medical center
+          </div>
         </div>
       </div>
 
@@ -1574,151 +1738,142 @@ export function DoctorReviewHistoryView({
             return (
               <div
                 key={c.id}
-                className="bg-white p-5 rounded-2xl border border-slate-200 shadow-2xs hover:shadow-md transition-all space-y-3"
+                className="bg-white rounded-2xl border border-slate-200 p-5 shadow-xs hover:border-teal-300 hover:shadow-md transition-all flex flex-col md:flex-row md:items-center justify-between gap-4"
               >
-                {/* Header row */}
-                <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 border-b border-slate-100 pb-3">
-                  <div className="flex items-center gap-2 flex-wrap">
-                    <span className="font-black text-sm text-slate-900">{c.id}</span>
-                    <span className="text-xs font-bold text-teal-800 bg-teal-50 px-2 py-0.5 rounded border border-teal-200">
-                      UHID: {c.patientId}
-                    </span>
-                    <h2 className="text-base font-bold text-slate-900">
-                      {c.name}
-                    </h2>
-                    <span className="text-xs text-slate-500">
-                      ({c.age} yrs &bull; {c.gender})
+                {/* Left Info: Badges, Demographics, Complaint, Referral, Timestamps */}
+                <div className="space-y-1.5 min-w-0">
+                  {/* Top Badge Row */}
+                  <div className="flex items-center gap-2.5 flex-wrap">
+                    <span className="text-base font-extrabold text-slate-900 tracking-tight">
+                      Case {c.id}
                     </span>
 
-                    {/* PRIORITY BADGE */}
+                    {/* Priority Badge */}
                     <span
-                      className={`px-2.5 py-0.5 rounded-full text-xs font-bold border flex items-center gap-1.5 shadow-2xs ${priorityConfig.badgeClass}`}
+                      className={`px-2.5 py-0.5 rounded-full text-[10px] font-bold border ${priorityConfig.badgeClass}`}
                     >
-                      <PriorityIcon className={`w-3.5 h-3.5 ${priorityConfig.iconClass}`} />
-                      <span>Priority: {priorityConfig.label}</span>
+                      {priorityConfig.label}
                     </span>
 
-                    {/* STATUS BADGE */}
-                    <span
-                      className={`px-2.5 py-0.5 rounded-full text-xs font-bold border flex items-center gap-1.5 shadow-2xs ${statusConfig.badgeClass}`}
-                    >
-                      <StatusIcon className={`w-3.5 h-3.5 ${statusConfig.iconClass}`} />
-                      <span>Status: {statusConfig.label}</span>
+                    {/* Status / Clinical Decision Badge */}
+                    <span className={`inline-flex items-center gap-1 px-2 py-0.5 rounded-md text-[10px] font-bold border ${statusConfig.badgeClass}`}>
+                      <StatusIcon className={`w-3 h-3 ${statusConfig.iconClass}`} />
+                      <span>{c.doctorDecision || statusConfig.label}</span>
+                    </span>
+
+                    {/* Consultation Mode Badge */}
+                    <span className={`inline-flex items-center gap-1 px-2 py-0.5 rounded-md text-[10px] font-bold border ${
+                      c.consultationMode === "online"
+                        ? "bg-indigo-50 text-indigo-800 border-indigo-200"
+                        : "bg-blue-50 text-blue-800 border-blue-200"
+                    }`}>
+                      {c.consultationMode === "online" ? (
+                        <Video className="w-3 h-3 text-indigo-600" />
+                      ) : (
+                        <Building2 className="w-3 h-3 text-blue-600" />
+                      )}
+                      <span>{c.consultationMode === "online" ? "Online Teleconsult" : "In-Person Walk-in"}</span>
+                    </span>
+
+                    {/* Preferred Language Badge */}
+                    <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-md text-[10px] font-bold bg-teal-50 text-teal-800 border border-teal-200/80">
+                      <Languages className="w-3 h-3 text-teal-600" />
+                      <span>{c.language || "Odia"}</span>
                     </span>
                   </div>
 
-                  <div className="flex items-center gap-2">
-                    <span className="text-xs text-slate-400 font-medium">
-                      Reviewed: {c.reviewedAt || "Recently"}
+                  {/* Patient Demographics Row */}
+                  <div className="text-xs text-slate-600 flex items-center gap-2 flex-wrap">
+                    <span className="font-semibold text-slate-800">
+                      Patient ID: {c.patientId}
                     </span>
-                    <button
-                      type="button"
-                      onClick={() => setSelectedCaseToPrint(c)}
-                      className="px-3 py-1 bg-slate-100 hover:bg-slate-200 text-slate-700 rounded-lg text-xs font-bold transition-colors flex items-center gap-1.5 cursor-pointer ml-2"
-                    >
-                      <Printer className="w-3.5 h-3.5 text-slate-500" />
-                      <span>Print Slip</span>
-                    </button>
-                    <button
-                      type="button"
-                      onClick={() => {
-                        setSelectedCaseToReview(c);
-                        setActiveModalTab("Overview");
-                      }}
-                      className="px-4 py-1.5 bg-slate-900 hover:bg-slate-800 text-white rounded-full text-xs font-bold transition-all flex items-center gap-1.5 cursor-pointer shadow-xs ml-1 group"
-                    >
-                      <span>Review</span>
-                      <ArrowRight className="w-3.5 h-3.5 group-hover:translate-x-0.5 transition-transform" />
-                    </button>
+                    {c.name && (
+                      <>
+                        <span>&bull;</span>
+                        <span className="font-medium text-slate-700">Name: {c.name}</span>
+                      </>
+                    )}
+                    {(c.age || c.gender) && (
+                      <>
+                        <span>&bull;</span>
+                        <span className="text-slate-500">
+                          {c.age ? `${c.age} yrs` : ""} {c.age && c.gender ? "•" : ""} {c.gender || ""}
+                        </span>
+                      </>
+                    )}
+                    {c.location && (
+                      <>
+                        <span>&bull;</span>
+                        <span className="text-slate-500">{c.location}</span>
+                      </>
+                    )}
+                  </div>
+
+                  {/* Chief Complaint Quote */}
+                  <p className="text-xs text-slate-600 line-clamp-1 italic max-w-2xl pt-0.5">
+                    &ldquo;{c.chiefComplaint}&rdquo;
+                  </p>
+
+                  {/* Referral Info if Referred */}
+                  {(referral || c.referalFacility) && (
+                    <div className="text-xs text-indigo-950 font-semibold flex items-center gap-2 flex-wrap">
+                      <ArrowRightLeft className="w-3.5 h-3.5 text-indigo-700 shrink-0" />
+                      <span>Referred to: <strong className="text-indigo-900">{referral || c.referalFacility}</strong></span>
+                      {c.patientReferralStatus === "Accepted" ? (
+                        <span className="px-2 py-0.5 rounded-full text-[10px] font-bold bg-emerald-100 text-emerald-800 border border-emerald-300">
+                          ✓ Patient Accepted
+                        </span>
+                      ) : c.patientReferralStatus === "Declined" ? (
+                        <span className="px-2 py-0.5 rounded-full text-[10px] font-bold bg-rose-100 text-rose-800 border border-rose-300">
+                          ✕ Patient Declined
+                        </span>
+                      ) : (
+                        <span className="px-2 py-0.5 rounded-full text-[10px] font-bold bg-amber-100 text-amber-800 border border-amber-300">
+                          ⏳ Awaiting Patient Consent
+                        </span>
+                      )}
+                      {c.facilityReferralStatus === "Accepted" && (
+                        <span className="px-2 py-0.5 rounded-full text-[10px] font-bold bg-sky-100 text-sky-800 border border-sky-300">
+                          ✓ Under Review at Facility
+                        </span>
+                      )}
+                      {(c.transferReason || cleanNotes) && (
+                        <span className="text-slate-500 font-normal">
+                          &bull; Reason: {c.transferReason || cleanNotes}
+                        </span>
+                      )}
+                    </div>
+                  )}
+
+                  {/* Bottom Line: Submitted Time and Reviewed Time */}
+                  <div className="flex items-center gap-2 text-xs text-slate-500 flex-wrap">
+                    <span>Submitted: {c.submittedTime || "Recently"}</span>
+                    <span>&bull;</span>
+                    <span className="text-teal-800 font-semibold">Reviewed: {c.reviewedAt || "Recently"}</span>
                   </div>
                 </div>
 
-                {/* Clinical Details */}
-                <div className="grid grid-cols-1 md:grid-cols-3 gap-4 text-xs">
-                  <div className="md:col-span-2 space-y-2.5">
-                    <div>
-                      <span className="font-bold text-slate-500 text-[10px] uppercase">
-                        Presenting Complaint:
-                      </span>
-                      <p className="text-slate-800 font-medium mt-0.5">
-                        {c.chiefComplaint}
-                      </p>
-                    </div>
-
-                    {/* ACTION-SPECIFIC AUDIT DETAILS */}
-                    {/* Hospital Checkup Timeline */}
-                    {timeline && (
-                      <div className="p-2.5 bg-emerald-50/80 rounded-xl border border-emerald-200 flex items-center gap-2 text-xs text-emerald-950 font-semibold">
-                        <Clock className="w-4 h-4 text-emerald-700 shrink-0" />
-                        <span>Hospital Checkup Timeline: <strong className="text-emerald-900 font-bold">{timeline}</strong></span>
-                      </div>
-                    )}
-
-                    {/* Medical Center Referral */}
-                    {referral && (
-                      <div className="p-2.5 bg-amber-50/80 rounded-xl border border-amber-200 flex items-center gap-2 text-xs text-amber-950 font-semibold">
-                        <ArrowRightLeft className="w-4 h-4 text-amber-700 shrink-0" />
-                        <span>Referred Medical Center: <strong className="text-amber-900 font-bold">{referral}</strong></span>
-                      </div>
-                    )}
-
-                    {/* Teleconsultation Indicator */}
-                    {teleconsult && (
-                      <div className="p-2.5 bg-indigo-50/80 rounded-xl border border-indigo-200 flex items-center gap-2 text-xs text-indigo-950 font-semibold">
-                        <Video className="w-4 h-4 text-indigo-700 shrink-0" />
-                        <span>Teleconsultation Completed: <strong className="text-indigo-900 font-bold">Clinical video consultation conducted with patient</strong></span>
-                      </div>
-                    )}
-
-                    {/* Doctor Clinical Assessment Note */}
-                    <div className="p-3 bg-slate-50 rounded-xl border border-slate-200">
-                      <span className="font-bold text-slate-700 block text-[10px] uppercase tracking-wider mb-0.5">
-                        Doctor Assessment &amp; Clinical Notes:
-                      </span>
-                      <p className="text-xs text-slate-800 font-semibold leading-relaxed">
-                        {cleanNotes || "Triage verified and cleared for clinical follow-up."}
-                      </p>
-                    </div>
-                  </div>
-
-                  {/* Prescriptions & Attending MO */}
-                  <div className="p-3 bg-slate-50 rounded-xl border border-slate-200 space-y-2">
-                    {c.prescriptions && (!c.doctorDecision || !c.doctorDecision.toLowerCase().includes("refer")) && c.status !== "Referred" ? (
-                      <div>
-                        <span className="font-bold text-slate-700 flex items-center gap-1 text-[11px]">
-                          <Pill className="w-3.5 h-3.5 text-teal-700" />
-                          <span>e-Prescription Authorized:</span>
-                        </span>
-                        <div className="mt-1.5 p-2 bg-white rounded-lg border border-teal-200 text-xs font-mono text-teal-950 leading-relaxed space-y-1">
-                          {c.prescriptions.split("\n").map((line, idx) => (
-                            <div key={idx} className="font-semibold text-slate-800">
-                              {line}
-                            </div>
-                          ))}
-                        </div>
-                      </div>
-                    ) : c.doctorDecision && c.doctorDecision.toLowerCase().includes("admit") ? (
-                      <div className="text-[11px] text-sky-900 bg-sky-50/70 p-2 rounded-lg border border-sky-200/80 flex items-center gap-1.5">
-                        <Building2 className="w-3.5 h-3.5 text-sky-700 shrink-0" />
-                        <span>Admitted to Ward &bull; Under Inpatient Review</span>
-                      </div>
-                    ) : c.doctorDecision && c.doctorDecision.toLowerCase().includes("refer") ? (
-                      <div className="text-[11px] text-indigo-900 bg-indigo-50/70 p-2 rounded-lg border border-indigo-200/80 flex items-center gap-1.5">
-                        <ArrowRightLeft className="w-3.5 h-3.5 text-indigo-700 shrink-0" />
-                        <span>Transferred to referral facility &bull; Case closed</span>
-                      </div>
-                    ) : (
-                      <div className="text-[11px] text-amber-900 bg-amber-50/60 p-2 rounded-lg border border-amber-200/80 flex items-center gap-1.5">
-                        <Clock className="w-3.5 h-3.5 text-amber-700 shrink-0" />
-                        <span>Awaiting hospital arrival &bull; Prescription pending in-person checkup</span>
-                      </div>
-                    )}
-
-                    <div className="pt-2 border-t border-slate-200 text-[11px] text-slate-600 flex items-center justify-between">
-                      <span>Authorized by:</span>
-                      <strong className="text-slate-900">{c.attendingDoctor || "Dr. Kavita Verma, MD"}</strong>
-                    </div>
-                  </div>
+                {/* Right Action Buttons */}
+                <div className="flex items-center gap-2.5 shrink-0">
+                  <button
+                    type="button"
+                    onClick={() => setSelectedCaseToPrint(c)}
+                    className="px-3.5 py-2.5 bg-slate-100 hover:bg-slate-200 text-slate-700 rounded-xl text-xs font-bold transition-colors flex items-center gap-1.5 cursor-pointer shadow-2xs"
+                  >
+                    <Printer className="w-3.5 h-3.5 text-slate-500" />
+                    <span>Print Slip</span>
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setSelectedCaseToReview(c);
+                      setActiveModalTab("Overview");
+                    }}
+                    className="px-5 py-2.5 bg-slate-900 hover:bg-teal-800 text-white font-bold text-xs rounded-xl shadow-xs flex items-center gap-1.5 transition-all cursor-pointer group"
+                  >
+                    <span>Review</span>
+                    <ArrowRight className="w-3.5 h-3.5 group-hover:translate-x-0.5 transition-transform" />
+                  </button>
                 </div>
               </div>
             );

@@ -148,8 +148,8 @@ export function NurseShell({
                 <Building2 className="w-4 h-4" />
               </div>
               <div className="min-w-0 flex-1">
-                <div className="text-xs font-bold text-slate-900 truncate">
-                  CHC Khandapada
+                <div className="text-xs font-bold text-slate-900 truncate" title={user?.facilityName || "Designated Health Facility"}>
+                  {user?.facilityName || "Designated Health Facility"}
                 </div>
                 <div className="text-[10px] text-teal-700 font-medium flex items-center gap-1">
                   <span className="w-1.5 h-1.5 rounded-full bg-emerald-500 animate-pulse" />
@@ -177,8 +177,8 @@ export function NurseShell({
 
             {/* Breadcrumb / Station context on left instead of redundant logo */}
             <div className="hidden sm:flex items-center gap-2 text-xs font-semibold text-slate-600">
-              <span className="text-[11px] font-bold text-teal-800 bg-teal-50 px-2 py-0.5 rounded border border-teal-200">
-                CHC Khandapada
+              <span className="text-[11px] font-bold text-teal-800 bg-teal-50 px-2 py-0.5 rounded border border-teal-200 max-w-[220px] truncate" title={user?.facilityName || "Designated Health Facility"}>
+                {user?.facilityName || "Designated Health Facility"}
               </span>
               <span className="text-slate-300">&bull;</span>
               <span className="text-slate-500 font-medium">

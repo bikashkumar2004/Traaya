@@ -34,24 +34,24 @@ export function DoctorProfileView() {
   const [savedToast, setSavedToast] = useState<string | null>(null);
 
   // Doctor Profile States initialized from user in profiles table
-  const [fullName, setFullName] = useState<string>(user?.fullName || "Dr. Ramesh Chandra Mohanty");
+  const [fullName, setFullName] = useState<string>(user?.fullName || "");
   const [designation, setDesignation] = useState<string>("Senior Attending Physician & Clinical Specialist");
   const [qualification, setQualification] = useState<string>("MBBS, MD (Emergency Medicine)");
   const [department, setDepartment] = useState<string>("Department of Medicine & Emergency OPD");
   const [roomNumber, setRoomNumber] = useState<string>("OPD Room 102");
-  const [phone, setPhone] = useState<string>(user?.phone || "+91 94371 08942");
-  const [email, setEmail] = useState<string>(user?.email || "dr.ramesh.8942@triageassist.org");
+  const [phone, setPhone] = useState<string>(user?.phone || "");
+  const [email, setEmail] = useState<string>(user?.email || "");
   const [hprId, setHprId] = useState<string>("91-7712-3321-4402@hpr");
 
   // STAFF ID: Taken directly from userId stored in profiles table
-  const [staffId, setStaffId] = useState<string>(user?.userId || user?.patientUhid || "DOC-8942");
+  const [staffId, setStaffId] = useState<string>(user?.userId || user?.patientUhid || "");
 
   const [councilReg, setCouncilReg] = useState<string>("MCI-OD-2012-8942");
-  const [facility, setFacility] = useState<string>(user?.facilityName || "Community Health Centre (CHC) Khandapada");
-  const [district, setDistrict] = useState<string>(user?.district || "Nayagarh, Odisha");
-  const [bloodGroup, setBloodGroup] = useState<string>(user?.bloodGroup || "B+");
-  const [gender, setGender] = useState<string>(user?.gender || "Male");
-  const [dob, setDob] = useState<string>(user?.dateOfBirth || "1982-04-12");
+  const [facility, setFacility] = useState<string>(user?.facilityName || "");
+  const [district, setDistrict] = useState<string>(user?.district || "");
+  const [bloodGroup, setBloodGroup] = useState<string>(user?.bloodGroup || "");
+  const [gender, setGender] = useState<string>(user?.gender || "");
+  const [dob, setDob] = useState<string>(user?.dateOfBirth || "");
   const [shift, setShift] = useState<string>("Morning OPD (08:00 AM - 02:00 PM)");
 
   // Clinical Statistics (Real live numbers loaded directly from database)

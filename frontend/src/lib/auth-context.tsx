@@ -2,6 +2,15 @@
 
 import React, { createContext, useContext, useEffect, useState, useCallback } from "react";
 import { supabase, isSupabaseConfigured, formatToE164Phone } from "./supabase";
+import {
+  setAuthCookies,
+  clearAuthCookies,
+  getLocalAuthSession,
+  saveLocalUserDisplay,
+  fetchServerAuthSession,
+  refreshAuthToken,
+  AuthTokenResponse,
+} from "./auth-cookies";
 
 export type UserRole = "patient" | "nurse" | "doctor" | "admin" | "organization" | "healthcamp" | "facility" | "medical";
 export type Language = 
@@ -80,6 +89,7 @@ export interface UserProfile {
   age?: string | number;
   bloodGroup?: string;
   patientUhid?: string; // Backwards-compatible alias for userId
+  facilityId?: string;
   facilityName?: string;
   addressLine1?: string;
   state?: string;
@@ -130,6 +140,10 @@ export interface PatientRegistrationPayload {
 interface AuthContextType {
   user: UserProfile | null;
   role: UserRole;
+  accessToken: string | null;
+  expiresAt: number | null;
+  expiresIn: number | null;
+  tokenType: string | null;
   language: Language;
   setLanguage: (lang: Language) => void;
   loginWithPhoneOtp: (role: UserRole, phone: string, customName?: string) => Promise<void>;
@@ -144,56 +158,78 @@ interface AuthContextType {
 
 const AuthContext = createContext<AuthContextType | undefined>(undefined);
 
-export function AuthProvider({ children }: { children: React.ReactNode }) {
-  const [user, setUser] = useState<UserProfile | null>(null);
-  const [language, setLanguage] = useState<Language>("en");
-  const [isLoading, setIsLoading] = useState(true);
+export function AuthProvider({ children, initialUser }: { children: React.ReactNode; initialUser?: UserProfile | null }) {
+  // In-memory token storage (never written to sessionStorage or localStorage)
+  const [accessToken, setAccessToken] = useState<string | null>(null);
+  const [expiresAt, setExpiresAt] = useState<number | null>(null);
+  const [expiresIn, setExpiresIn] = useState<number | null>(null);
+  const [tokenType, setTokenType] = useState<string | null>("Bearer");
 
-  // Helper to map Supabase public.profiles row and patient_profiles row to UserProfile
-  const mapSupabaseProfile = (row: any, authUser?: any, patientRow?: any): UserProfile => {
-    const chronicConditions = Array.isArray(patientRow?.chronic_conditions) && patientRow.chronic_conditions.length > 0
-      ? patientRow.chronic_conditions
+  // Use server-provided initialUser for SSR/client agreement (no hydration mismatch).
+  // localStorage/cookie enrichment happens in the useEffect below.
+  const [user, setUser] = useState<UserProfile | null>(initialUser || null);
+  const [language, setLanguage] = useState<Language>("en");
+  const [isLoading, setIsLoading] = useState(false);
+
+  // Helper to map Supabase public.profiles row and role rows (patient_profiles, nurse_profiles, doctor_profiles) to UserProfile
+  const mapSupabaseProfile = (row: any, authUser?: any, roleRow?: any): UserProfile => {
+    const chronicConditions = Array.isArray(roleRow?.chronic_conditions) && roleRow.chronic_conditions.length > 0
+      ? roleRow.chronic_conditions
       : (Array.isArray(row.chronic_conditions) && row.chronic_conditions.length > 0
         ? row.chronic_conditions
         : (Array.isArray(row.metadata?.chronic_conditions) ? row.metadata.chronic_conditions : []));
 
-    const allergies = Array.isArray(patientRow?.allergies) && patientRow.allergies.length > 0
-      ? patientRow.allergies
+    const allergies = Array.isArray(roleRow?.allergies) && roleRow.allergies.length > 0
+      ? roleRow.allergies
       : (Array.isArray(row.allergies) && row.allergies.length > 0
         ? row.allergies
         : (Array.isArray(row.metadata?.allergies) ? row.metadata.allergies : []));
 
-    const dependents = Array.isArray(patientRow?.dependents) && patientRow.dependents.length > 0
-      ? patientRow.dependents
+    const dependents = Array.isArray(roleRow?.dependents) && roleRow.dependents.length > 0
+      ? roleRow.dependents
       : (Array.isArray(row.dependents) && row.dependents.length > 0
         ? row.dependents
         : (Array.isArray(row.metadata?.dependents) ? row.metadata.dependents : []));
 
-    const isAffilatedToOrg = patientRow?.is_affilated_to_org ?? row.is_affilated_to_org ?? row.metadata?.is_affilated_to_org ?? false;
-    const organizationName = patientRow?.organization_name || row.organization_name || row.metadata?.organizationName || row.metadata?.organization_name || "";
-    const idInOrg = patientRow?.id_in_org || row.id_in_org || row.metadata?.idInOrg || row.metadata?.id_in_org || "";
-    const orgIdCard = patientRow?.org_id_card || row.org_id_card || row.metadata?.orgIdCard || row.metadata?.org_id_card || "";
+    const isAffilatedToOrg = roleRow?.is_affilated_to_org ?? row.is_affilated_to_org ?? row.metadata?.is_affilated_to_org ?? false;
+    const organizationName = roleRow?.organization_name || row.organization_name || row.metadata?.organizationName || row.metadata?.organization_name || "";
+    const idInOrg = roleRow?.id_in_org || row.id_in_org || row.metadata?.idInOrg || row.metadata?.id_in_org || "";
+    const orgIdCard = roleRow?.org_id_card || row.org_id_card || row.metadata?.orgIdCard || row.metadata?.org_id_card || "";
+
+    const resolvedFacilityId =
+      roleRow?.facility_id ||
+      row.facility_id ||
+      (row.role === "facility" || row.role === "medical" ? row.id : "") ||
+      "";
+
+    const resolvedFacilityName =
+      roleRow?.facility_name ||
+      row.facility_name ||
+      roleRow?.primary_facility_name ||
+      (row.role === "facility" || row.role === "medical" ? row.full_name : "") ||
+      "";
 
     return {
       id: row.id || authUser?.id,
       userId: row.user_id || row.patient_uhid || authUser?.user_metadata?.user_id,
       email: row.email || authUser?.email || "",
-      fullName: row.full_name || authUser?.user_metadata?.full_name || "Healthcare User",
+      fullName: row.full_name || authUser?.user_metadata?.full_name || "",
       role: (row.role as UserRole) || (authUser?.user_metadata?.role as UserRole) || "patient",
       phone: row.phone || authUser?.phone || authUser?.user_metadata?.phone,
-      patientUhid: row.user_id || row.patient_uhid || authUser?.user_metadata?.patient_uhid || "PAT-8402",
-      gender: row.gender || "male",
+      patientUhid: row.user_id || row.patient_uhid || authUser?.user_metadata?.patient_uhid || "",
+      gender: row.gender || "",
       dateOfBirth: row.date_of_birth,
       age: row.age,
-      bloodGroup: patientRow?.blood_group || row.blood_group,
-      facilityName: patientRow?.primary_facility_name || row.facility_name || "Primary Health Centre & Sub-Centres",
+      bloodGroup: roleRow?.blood_group || row.blood_group,
+      facilityId: resolvedFacilityId,
+      facilityName: resolvedFacilityName,
       addressLine1: row.address_line1,
       state: row.state,
       district: row.district,
       city: row.city,
       block: row.block,
       postalCode: row.postal_code,
-      disability: patientRow?.disability || row.disability || "No",
+      disability: roleRow?.disability || row.disability || "No",
       chronicConditions,
       allergies,
       dependents,
@@ -203,7 +239,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       orgIdCard,
       metadata: {
         ...(row.metadata || {}),
-        ...(patientRow?.metadata || {}),
+        ...(roleRow?.metadata || {}),
         organizationName,
       },
     };
@@ -211,33 +247,89 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
 
   // Helper to fetch live profile from Supabase public.profiles table and role tables
   const fetchProfileFromSupabase = useCallback(async (userId: string, authUser?: any): Promise<UserProfile | null> => {
-    if (!isSupabaseConfigured || !supabase) return null;
+    if (!isSupabaseConfigured || !supabase || !userId) return null;
     try {
-      const { data, error } = await supabase
-        .from("profiles")
-        .select("*")
-        .eq("id", userId)
-        .maybeSingle();
+      const isUuid = /^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$/.test(userId);
+
+      let data: any = null;
+      let error: any = null;
+
+      if (isUuid) {
+        const res = await supabase
+          .from("profiles")
+          .select("*")
+          .eq("id", userId)
+          .maybeSingle();
+        data = res.data;
+        error = res.error;
+      } else {
+        // userId is not a UUID (e.g. "usr-kumarbik" or "PAT-8402"), search by user_id column
+        const res = await supabase
+          .from("profiles")
+          .select("*")
+          .eq("user_id", userId)
+          .maybeSingle();
+        data = res.data;
+        error = res.error;
+      }
+
+      // If not found yet and authUser has a UUID id, try matching by authUser.id
+      if (!data && authUser?.id && authUser.id !== userId) {
+        const isAuthUuid = /^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$/.test(authUser.id);
+        if (isAuthUuid) {
+          const authRes = await supabase
+            .from("profiles")
+            .select("*")
+            .eq("id", authUser.id)
+            .maybeSingle();
+          if (authRes.data) {
+            data = authRes.data;
+            error = null;
+          }
+        }
+      }
 
       if (error) {
         console.warn("Notice reading profile from Supabase:", error.message);
       }
 
       if (data) {
-        let patientRow = null;
-        if (data.role === "patient") {
+        let roleRow = null;
+        if (data.role === "patient" && data.id) {
           const { data: pData, error: pError } = await supabase
             .from("patient_profiles")
             .select("*")
-            .eq("profile_id", userId)
+            .eq("profile_id", data.id)
             .maybeSingle();
           if (pError) {
             console.warn("Notice reading patient profile:", pError.message);
           } else {
-            patientRow = pData;
+            roleRow = pData;
+          }
+        } else if (data.role === "nurse" && data.id) {
+          const { data: nData, error: nError } = await supabase
+            .from("nurse_profiles")
+            .select("*")
+            .eq("profile_id", data.id)
+            .maybeSingle();
+          if (nError) {
+            console.warn("Notice reading nurse profile:", nError.message);
+          } else {
+            roleRow = nData;
+          }
+        } else if (data.role === "doctor" && data.id) {
+          const { data: dData, error: dError } = await supabase
+            .from("doctor_profiles")
+            .select("*")
+            .eq("profile_id", data.id)
+            .maybeSingle();
+          if (dError) {
+            console.warn("Notice reading doctor profile:", dError.message);
+          } else {
+            roleRow = dData;
           }
         }
-        return mapSupabaseProfile(data, authUser, patientRow);
+        return mapSupabaseProfile(data, authUser, roleRow);
       }
     } catch (err) {
       console.error("fetchProfileFromSupabase exception:", err);
@@ -247,10 +339,10 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       return {
         id: authUser.id,
         email: authUser.email || "",
-        fullName: authUser.user_metadata?.full_name || "Healthcare User",
+        fullName: authUser.user_metadata?.full_name || "",
         role: (authUser.user_metadata?.role as UserRole) || "patient",
         phone: authUser.phone || authUser.user_metadata?.phone,
-        patientUhid: authUser.user_metadata?.patient_uhid || "PAT-8402",
+        patientUhid: authUser.user_metadata?.patient_uhid || authUser.user_metadata?.user_id || "",
       };
     }
     return null;
@@ -261,64 +353,144 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       const updated = await fetchProfileFromSupabase(user.id);
       if (updated) {
         setUser(updated);
+        saveLocalUserDisplay(updated);
       }
     }
   }, [user?.id, fetchProfileFromSupabase]);
 
+  const updateTokensAndUser = useCallback((authRes: AuthTokenResponse | null) => {
+    if (authRes?.access_token) {
+      setAccessToken(authRes.access_token);
+      setExpiresAt(authRes.expires_at);
+      setExpiresIn(authRes.expires_in);
+      setTokenType(authRes.token_type || "Bearer");
+    }
+  }, []);
+
+  // Silent refresh: refreshes in-memory access_token 60 seconds before expiration
+  useEffect(() => {
+    if (!expiresAt) return;
+    const now = Math.floor(Date.now() / 1000);
+    const delayMs = Math.max((expiresAt - now - 60) * 1000, 15000);
+
+    const timer = setTimeout(async () => {
+      const res = await refreshAuthToken();
+      if (res?.access_token) {
+        updateTokensAndUser(res);
+      }
+    }, delayMs);
+
+    return () => clearTimeout(timer);
+  }, [expiresAt, updateTokensAndUser]);
+
+  // Initial silent refresh: recover in-memory access_token from HttpOnly refresh_token cookie
   useEffect(() => {
     let savedRole: UserRole | null = null;
     if (typeof window !== "undefined") {
-      // Check saved language and role preference from sessionStorage only
       savedRole = sessionStorage.getItem("triage_active_role") as UserRole | null;
       const savedLang = sessionStorage.getItem("triage_language") as Language | null;
-
       if (savedLang) {
         setLanguage(savedLang);
       }
-
-      // Security Cleanup: Purge all residual authentication and triage keys from localStorage
-      const keysToPurge = [
-        "triage_custom_user",
-        "triage_active_role",
-        "triage_language",
-        "triage_supabase_user_id",
-        "triage_verified_reg_phone"
-      ];
-      keysToPurge.forEach((k) => localStorage.removeItem(k));
-
-      for (let i = localStorage.length - 1; i >= 0; i--) {
-        const k = localStorage.key(i);
-        if (k && (k.startsWith("sb-") || k.includes("auth-token") || k.startsWith("triage_"))) {
-          localStorage.removeItem(k);
-        }
-      }
     }
+
+    // Fast local session fallback for immediate UI rendering
+    const localSession = getLocalAuthSession();
+    if (localSession?.id && localSession?.role) {
+      setUser((prev) => prev?.fullName ? prev : ({
+        id: localSession.id,
+        userId: localSession.userId || localSession.patientUhid,
+        email: localSession.email || "",
+        fullName: localSession.fullName || "",
+        role: (localSession.role as UserRole) || "patient",
+        phone: localSession.phone,
+        patientUhid: localSession.patientUhid || localSession.userId,
+        facilityName: localSession.facilityName,
+        gender: localSession.gender,
+        age: localSession.age,
+        bloodGroup: localSession.bloodGroup,
+      }));
+    }
+
+    // Recover in-memory access_token via server HttpOnly refresh_token cookie
+    refreshAuthToken().then(async (authRes) => {
+      if (authRes?.access_token && authRes?.user) {
+        updateTokensAndUser(authRes);
+        if (isSupabaseConfigured && supabase) {
+          const profile = await fetchProfileFromSupabase(authRes.user.id);
+          if (profile) {
+            setUser(profile);
+            saveLocalUserDisplay(profile);
+            setIsLoading(false);
+            return;
+          }
+        }
+        setUser((prev) => ({
+          ...(prev || {}),
+          id: authRes.user.id,
+          userId: authRes.user.userId || authRes.user.patientUhid,
+          email: authRes.user.email || prev?.email || "",
+          fullName: authRes.user.fullName || prev?.fullName || "",
+          role: (authRes.user.role as UserRole) || prev?.role || "patient",
+          phone: authRes.user.phone || prev?.phone,
+          patientUhid: authRes.user.patientUhid || authRes.user.userId || prev?.patientUhid,
+          facilityName: authRes.user.facilityName || prev?.facilityName,
+        }));
+        setIsLoading(false);
+        return;
+      }
+
+      // Check fallback session
+      const serverSession = await fetchServerAuthSession();
+      if (serverSession?.id && serverSession?.role) {
+        setUser((prev) => ({
+          ...(prev || {}),
+          id: serverSession.id,
+          userId: serverSession.userId || serverSession.patientUhid,
+          email: serverSession.email || prev?.email || "",
+          fullName: serverSession.fullName || prev?.fullName || "",
+          role: (serverSession.role as UserRole) || prev?.role || "patient",
+          phone: serverSession.phone || prev?.phone,
+          patientUhid: serverSession.patientUhid || serverSession.userId || prev?.patientUhid,
+          facilityName: serverSession.facilityName || prev?.facilityName,
+        }));
+      } else if (!localSession?.id) {
+        setUser(null);
+      }
+      setIsLoading(false);
+    });
 
     if (isSupabaseConfigured && supabase) {
       const sb = supabase;
-      // 1. Get initial live Supabase session from sessionStorage
+      // 1. Check live Supabase session
       sb.auth.getSession().then(async ({ data: { session } }) => {
         if (session?.user) {
           const profile = await fetchProfileFromSupabase(session.user.id, session.user);
           if (profile) {
             setUser(profile);
+            saveLocalUserDisplay(profile);
+            await setAuthCookies({
+              ...profile,
+              role: profile.role,
+            });
             setIsLoading(false);
             return;
           }
         }
 
-        // Fallback: If no active session, check if there is a primary patient profile in Supabase
-        const { data: defaultProfile } = await sb
-          .from("profiles")
-          .select("*")
-          .order("updated_at", { ascending: false })
-          .limit(1)
-          .maybeSingle();
-
-        if (defaultProfile) {
-          const fullProfile = await fetchProfileFromSupabase(defaultProfile.id);
-          setUser(fullProfile || mapSupabaseProfile(defaultProfile));
-        } else {
+        // If local cookie session exists, try to refresh profile from Supabase
+        if (localSession?.id) {
+          const refreshed = await fetchProfileFromSupabase(localSession.id);
+          if (refreshed) {
+            setUser(refreshed);
+            saveLocalUserDisplay(refreshed);
+            await setAuthCookies({
+              ...refreshed,
+              role: refreshed.role,
+            });
+          }
+        } else if (!getLocalAuthSession()) {
+          // No active session and no cookie -> user is strictly unauthenticated
           setUser(null);
         }
         setIsLoading(false);
@@ -330,9 +502,20 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
           const profile = await fetchProfileFromSupabase(session.user.id, session.user);
           if (profile) {
             setUser(profile);
+            saveLocalUserDisplay(profile);
+            await setAuthCookies({
+              id: profile.id,
+              userId: profile.userId || profile.patientUhid,
+              email: profile.email,
+              fullName: profile.fullName,
+              role: profile.role,
+              phone: profile.phone,
+              patientUhid: profile.patientUhid,
+            });
           }
         } else if (event === "SIGNED_OUT") {
           setUser(null);
+          await clearAuthCookies();
         }
       });
 
@@ -340,7 +523,9 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         subscription.unsubscribe();
       };
     } else {
-      setUser(null);
+      if (!localSession?.id) {
+        setUser(null);
+      }
       setIsLoading(false);
     }
   }, [fetchProfileFromSupabase]);
@@ -367,10 +552,16 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         const fullProfile = await fetchProfileFromSupabase(profile.id);
         const mapped = fullProfile || mapSupabaseProfile(profile);
         setUser(mapped);
+        saveLocalUserDisplay(mapped);
         const resolvedRole = mapped.role || role;
         if (typeof window !== "undefined") {
           sessionStorage.setItem("triage_active_role", resolvedRole);
         }
+        const authRes = await setAuthCookies({
+          ...mapped,
+          role: resolvedRole,
+        });
+        updateTokensAndUser(authRes);
         return;
       }
     }
@@ -388,9 +579,15 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       patientUhid: newUhid,
     };
     setUser(newUser);
+    saveLocalUserDisplay(newUser);
     if (typeof window !== "undefined") {
       sessionStorage.setItem("triage_active_role", role);
     }
+    const authRes = await setAuthCookies({
+      ...newUser,
+      role: role,
+    });
+    updateTokensAndUser(authRes);
   };
 
   const loginWithEmailPassword = async (role: UserRole, email: string, password: string): Promise<boolean> => {
@@ -407,10 +604,16 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
           const profile = await fetchProfileFromSupabase(data.user.id, data.user);
           if (profile) {
             setUser(profile);
+            saveLocalUserDisplay(profile);
             const resolvedRole = profile.role || role;
             if (typeof window !== "undefined") {
               sessionStorage.setItem("triage_active_role", resolvedRole);
             }
+            const authRes = await setAuthCookies({
+              ...profile,
+              role: resolvedRole,
+            });
+            updateTokensAndUser(authRes);
             return true;
           }
         }
@@ -429,27 +632,39 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         const fullProfile = await fetchProfileFromSupabase(profile.id);
         const mapped = fullProfile || mapSupabaseProfile(profile);
         setUser(mapped);
+        saveLocalUserDisplay(mapped);
         const resolvedRole = mapped.role || role;
         if (typeof window !== "undefined") {
           sessionStorage.setItem("triage_active_role", resolvedRole);
         }
+        const authRes = await setAuthCookies({
+          ...mapped,
+          role: resolvedRole,
+        });
+        updateTokensAndUser(authRes);
         return true;
       }
     }
 
     // Direct fallback authenticated profile
-    const uhidPrefix = role === "doctor" ? "DOC" : role === "nurse" ? "STF" : (role === "facility" || role === "medical") ? "FAC" : "PAT";
+    const uhidPrefix = role === "doctor" ? "DOC" : role === "nurse" ? "STF" : (role === "facility" || role === "medical") ? "FAC" : role === "admin" ? "ADM" : "PAT";
     const customUser: UserProfile = {
       id: `usr-${cleanEmail.split("@")[0].slice(0, 8)}`,
       email: cleanEmail,
-      fullName: cleanEmail.split("@")[0].replace(/[._-]/g, " ").replace(/\b\w/g, (c) => c.toUpperCase()),
+      fullName: role === "admin" ? "System Administrator" : cleanEmail.split("@")[0].replace(/[._-]/g, " ").replace(/\b\w/g, (c) => c.toUpperCase()),
       role: role,
       patientUhid: `${uhidPrefix}-${Math.floor(1000 + Math.random() * 9000)}`,
     };
     setUser(customUser);
+    saveLocalUserDisplay(customUser);
     if (typeof window !== "undefined") {
       sessionStorage.setItem("triage_active_role", role);
     }
+    const authRes = await setAuthCookies({
+      ...customUser,
+      role: role,
+    });
+    updateTokensAndUser(authRes);
     return true;
   };
 
@@ -490,9 +705,15 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
 
       const finalizedProfile: UserProfile = json.user;
       setUser(finalizedProfile);
+      saveLocalUserDisplay(finalizedProfile);
       if (typeof window !== "undefined") {
         sessionStorage.setItem("triage_active_role", "patient");
       }
+      const authRes = await setAuthCookies({
+        ...finalizedProfile,
+        role: "patient",
+      });
+      updateTokensAndUser(authRes);
       return finalizedProfile;
     } catch (err: any) {
       console.error("registerPatient error:", err);
@@ -522,9 +743,15 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         metadata: data.metadata,
       };
       setUser(fallbackProfile);
+      saveLocalUserDisplay(fallbackProfile);
       if (typeof window !== "undefined") {
         sessionStorage.setItem("triage_active_role", "patient");
       }
+      const authRes = await setAuthCookies({
+        ...fallbackProfile,
+        role: "patient",
+      });
+      updateTokensAndUser(authRes);
       return fallbackProfile;
     }
   };
@@ -534,6 +761,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
 
     const newProfile: UserProfile = { ...user, ...updatedData };
     setUser(newProfile);
+    saveLocalUserDisplay(newProfile);
 
     if (isSupabaseConfigured && supabase && /^[0-9a-fA-F-]{36}$/.test(user.id)) {
       try {
@@ -621,6 +849,11 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         console.warn("Notice signing out:", e);
       }
     }
+    await clearAuthCookies();
+    setAccessToken(null);
+    setExpiresAt(null);
+    setExpiresIn(null);
+    setTokenType(null);
     setUser(null);
     if (typeof window !== "undefined") {
       sessionStorage.removeItem("triage_active_role");
@@ -640,6 +873,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
           localStorage.removeItem(k);
         }
       }
+      window.location.href = "/login";
     }
   };
 
@@ -648,6 +882,10 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       value={{
         user,
         role: user?.role || "patient",
+        accessToken,
+        expiresAt,
+        expiresIn,
+        tokenType,
         language,
         setLanguage: handleSetLanguage,
         loginWithPhoneOtp,

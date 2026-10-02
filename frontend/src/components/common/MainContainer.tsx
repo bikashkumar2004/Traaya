@@ -14,7 +14,8 @@ export function MainContainer({ children }: { children: React.ReactNode }) {
     pathname.startsWith("/doctor") ||
     pathname.startsWith("/organization") ||
     pathname.startsWith("/healthcamp") ||
-    pathname.startsWith("/medical");
+    pathname.startsWith("/medical") ||
+    pathname.startsWith("/facility");
 
   if (isCustomLayout) {
     return <main className="flex-1 w-full">{children}</main>;

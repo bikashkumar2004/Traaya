@@ -33,6 +33,8 @@ interface CaseActivityRecord {
   urgency: string;
   urgencyClass: string;
   assignedTo: string;
+  nurseId?: string;
+  nurseName?: string;
   reviewedBy: string;
   reviewedAt: string;
   notes: string;
@@ -42,6 +44,8 @@ interface CaseActivityRecord {
   referalFacility?: string;
   referalFacilityId?: string;
   transferReason?: string;
+  patientReferralStatus?: string;
+  facilityReferralStatus?: string;
 }
 
 function formatScheduleTime(isoString?: string): string {
@@ -71,52 +75,104 @@ function formatScheduleTime(isoString?: string): string {
 interface CaseActivityViewProps {
   initialCases?: CaseDetails[];
   onViewCase?: (c: any) => void;
+  currentNurseId?: string;
 }
 
 import { fetchLiveNurseActivityLog } from "@/lib/nurse-api";
 import { useAuth } from "@/lib/auth-context";
 
-export function CaseActivityView({ initialCases = [], onViewCase }: CaseActivityViewProps) {
+export function CaseActivityView({ initialCases = [], onViewCase, currentNurseId }: CaseActivityViewProps) {
   const { user } = useAuth();
   const [activeFilter, setActiveFilter] = useState<CaseActivityStatus>("All");
   const [searchTerm, setSearchTerm] = useState<string>("");
   const [records, setRecords] = useState<CaseActivityRecord[]>([]);
   const [loading, setLoading] = useState<boolean>(true);
 
+  // Resolve active nurse ID referencing profiles.id (UUID)
+  let activeNurseId = currentNurseId || user?.id;
+  if (!activeNurseId && typeof window !== "undefined") {
+    try {
+      const stored = localStorage.getItem("triageassist_user");
+      if (stored) {
+        const parsed = JSON.parse(stored);
+        activeNurseId = parsed?.id || parsed?.userId;
+      }
+    } catch {}
+  }
+
   React.useEffect(() => {
     async function loadActivities() {
       setLoading(true);
       try {
-        const liveLogs = await fetchLiveNurseActivityLog();
+        const liveLogs = await fetchLiveNurseActivityLog(activeNurseId);
         const mappedRecords: CaseActivityRecord[] = [];
 
         // 1. Map real audit actions from database
         if (liveLogs && liveLogs.length > 0) {
           liveLogs.forEach((log: any) => {
+            // Strictly enforce: only show actions taken by this nurse (decided by nurse_id)
+            const logNurseId = log.nurseId || log.nurse_id || log.triage_tickets?.nurse_id;
+            if (activeNurseId && logNurseId && logNurseId !== activeNurseId) {
+              return;
+            }
+
             // Check if record is already formatted from FastAPI endpoint
             if (log.patientName && log.status && log.assignedTo) {
+              const logStatus = (log.status || "").toLowerCase();
+              const rawStatus = (log.rawStatus || log.resulting_status || log.action_type || "").toLowerCase();
+              if (
+                logStatus.includes("revert") ||
+                rawStatus.includes("revert") ||
+                rawStatus.includes("awaiting patient") ||
+                logStatus.includes("under review") ||
+                logStatus.includes("draft")
+              ) {
+                return;
+              }
+
               mappedRecords.push({
                 ...(log as CaseActivityRecord),
+                nurseId: logNurseId,
+                nurseName: log.nurseName || log.nurse_name || user?.fullName || "Nurse Staff",
+                reviewedBy: log.reviewedBy || log.nurseName || log.nurse_name || user?.fullName || "Nurse Staff",
                 scheduleTime: log.scheduleTime || log.schedule_time || undefined,
                 referalFacility: log.referalFacility || log.referal_facility || undefined,
                 referalFacilityId: log.referalFacilityId || log.referal_facility_id || undefined,
                 transferReason: log.transferReason || log.transfer_reason || undefined,
+                patientReferralStatus: log.patientReferralStatus || log.patient_referral_status || undefined,
+                facilityReferralStatus: log.facilityReferralStatus || log.facility_referral_status || undefined,
               });
               return;
             }
 
-            const ticket = log.triage_tickets || {};
+            const ticket = log.triage_tickets || log || {};
             const profile = ticket.profiles || {};
             const isFam = ticket.is_family_member;
             const sdata = typeof ticket.symptoms_data === "object" && ticket.symptoms_data !== null ? ticket.symptoms_data : {};
             const snapshot = sdata?.patient_intake_snapshot || {};
 
-            let statusCategory: CaseActivityRecord["status"] = "Forwarded to Doctor";
-            const resStatus = (log.resulting_status || log.action_type || "").toLowerCase();
-            if (resStatus.includes("refer") || resStatus.includes("escalat")) {
+            const resStatus = (log.resulting_status || log.action_type || ticket.status || "").toLowerCase();
+            // Do not show reverted, draft, or pending triage cases in activity audit log
+            if (
+              resStatus.includes("revert") ||
+              resStatus.includes("awaiting patient") ||
+              resStatus === "draft" ||
+              resStatus === "under review" ||
+              resStatus === "awaiting nurse review"
+            ) {
+              return;
+            }
+
+            let statusCategory: CaseActivityRecord["status"];
+            // In forward to doctor, show only schedule cases
+            if (resStatus.includes("schedule") || resStatus.includes("forward")) {
+              statusCategory = "Forwarded to Doctor";
+            } else if (resStatus.includes("refer") || resStatus.includes("escalat")) {
               statusCategory = "Referrals & Escalations";
             } else if (resStatus.includes("complet") || resStatus.includes("verif") || resStatus.includes("resolv")) {
               statusCategory = "Completed History";
+            } else {
+              return;
             }
 
             const priority = ticket.priority || "Yellow";
@@ -129,8 +185,8 @@ export function CaseActivityView({ initialCases = [], onViewCase }: CaseActivity
 
             // Relative date
             let reviewedAt = "Recently";
-            if (log.created_at) {
-              const diffMs = Date.now() - new Date(log.created_at).getTime();
+            if (log.created_at || ticket.updated_at) {
+              const diffMs = Date.now() - new Date(log.created_at || ticket.updated_at).getTime();
               const mins = Math.floor(diffMs / 60000);
               if (mins < 1) reviewedAt = "Just now";
               else if (mins < 60) reviewedAt = `${mins}m ago`;
@@ -144,12 +200,15 @@ export function CaseActivityView({ initialCases = [], onViewCase }: CaseActivity
             const pAge = isFam ? ticket.family_member_age : (profile.age || snapshot.age || 35);
             const pGender = isFam ? ticket.family_member_gender : (profile.gender || snapshot.gender || "Other");
             const refDest = ticket.referal_facility || log.referral_destination;
+            const docDest = log.doctorName || log.doctor_name || ticket.assigned_doctor_name || (log.doctor_profile?.full_name) || "Attending Medical Officer";
             const destination = statusCategory === "Referrals & Escalations"
-              ? (refDest || log.assigned_doctor_name || "District Hospital (DHH) Nayagarh")
-              : (log.assigned_doctor_name || "Dr. Ananya Sen, MD");
+              ? (refDest || "District Hospital (DHH) Nayagarh")
+              : docDest;
+
+            const nurseName = log.nurseName || log.nurse_name || (log.nurse_profile?.full_name) || user?.fullName || "Nurse Staff";
 
             mappedRecords.push({
-              id: log.case_number || ticket.case_number || `#LS${String(log.ticket_id || "").slice(0, 4)}`,
+              id: log.case_number || ticket.case_number || `#LS${String(log.ticket_id || ticket.id || "").slice(0, 4)}`,
               patientId: pUhid,
               patientName: pName,
               age: pAge,
@@ -158,9 +217,11 @@ export function CaseActivityView({ initialCases = [], onViewCase }: CaseActivity
               urgency: priority,
               urgencyClass,
               assignedTo: destination,
-              reviewedBy: log.nurse_name || user?.fullName || "Sister Sarita Kumari Jena",
+              nurseId: logNurseId,
+              nurseName: nurseName,
+              reviewedBy: nurseName,
               reviewedAt,
-              notes: log.review_note || ticket.resolve_notes || (statusCategory === "Completed History" ? "Clinical resolution completed at triage desk." : ""),
+              notes: log.review_note || ticket.resolve_notes || (statusCategory === "Completed History" ? "Clinical resolution completed at triage desk." : "Action logged."),
               chiefComplaint: chiefComp,
               outcome: log.action_type || statusCategory,
               scheduleTime: log.scheduleTime || ticket.schedule_time || log.schedule_time,
@@ -171,9 +232,18 @@ export function CaseActivityView({ initialCases = [], onViewCase }: CaseActivity
           });
         }
 
-        // 2. Also map any cases from initialCases that have completed, referred, or scheduled statuses (excluding draft)
+        // 2. Also map any cases from initialCases that have completed, referred, or scheduled statuses
+        // Strictly restricted to actions taken by this nurse (decided by nurseId)
         if (initialCases && initialCases.length > 0) {
           initialCases.forEach((c) => {
+            // Decided strictly by nurseId matching the current logged-in nurse
+            if (activeNurseId && (!c.nurseId || c.nurseId !== activeNurseId)) {
+              return;
+            }
+            if (!c.nurseId) {
+              return;
+            }
+
             const isAlreadyMapped = mappedRecords.some((r) => r.id === c.id);
             const sLow = (c.status || "").toLowerCase();
             if (!isAlreadyMapped && (sLow === "scheduled" || sLow === "referred" || sLow === "completed")) {
@@ -182,6 +252,7 @@ export function CaseActivityView({ initialCases = [], onViewCase }: CaseActivity
               else if (sLow.includes("complet") || sLow.includes("verif") || sLow.includes("resolv")) cat = "Completed History";
 
               const refFac = c.referalFacility || c.facility;
+              const docDest = c.doctorName || "Attending Medical Officer";
 
               mappedRecords.push({
                 id: c.id,
@@ -192,16 +263,20 @@ export function CaseActivityView({ initialCases = [], onViewCase }: CaseActivity
                 status: cat,
                 urgency: c.urgency,
                 urgencyClass: c.urgencyClass,
-                assignedTo: cat === "Referrals & Escalations" ? (refFac || "District Hospital (DHH) Nayagarh") : "Dr. Ananya Sen, MD",
-                reviewedBy: user?.fullName || "Sister Sarita Kumari Jena",
+                assignedTo: cat === "Referrals & Escalations" ? (refFac || "District Hospital (DHH) Nayagarh") : docDest,
+                nurseId: c.nurseId,
+                nurseName: c.nurseName || user?.fullName || "Nurse Staff",
+                reviewedBy: c.nurseName || user?.fullName || "Nurse Staff",
                 reviewedAt: c.submittedTime || "Recently",
-                notes: c.quickNotes || (cat === "Completed History" ? "Clinical verification and treatment completed at triage desk." : ""),
+                notes: c.quickNotes || (cat === "Completed History" ? "Clinical verification and treatment completed at triage desk." : "Action logged."),
                 chiefComplaint: c.chiefComplaint,
                 outcome: cat === "Forwarded to Doctor" ? "Schedule & Forward to Doctor" : cat === "Referrals & Escalations" ? "Refer / Escalate" : "Resolve",
                 scheduleTime: c.scheduleTime,
                 referalFacility: refFac,
                 referalFacilityId: c.referalFacilityId,
                 transferReason: c.transferReason || undefined,
+                patientReferralStatus: c.patientReferralStatus,
+                facilityReferralStatus: c.facilityReferralStatus,
               });
             }
           });
@@ -216,7 +291,7 @@ export function CaseActivityView({ initialCases = [], onViewCase }: CaseActivity
     }
 
     loadActivities();
-  }, [initialCases, user?.fullName]);
+  }, [initialCases, activeNurseId, user?.fullName]);
 
   const filterTabs: CaseActivityStatus[] = [
     "All",
@@ -243,10 +318,6 @@ export function CaseActivityView({ initialCases = [], onViewCase }: CaseActivity
       {/* Case Activity Header like Patient page (no box) */}
       <div className="flex flex-col md:flex-row md:items-center justify-between gap-4">
         <div>
-          <div className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full text-xs font-bold bg-teal-50 text-teal-800 border border-teal-200/80 mb-2">
-            <span className="w-2 h-2 rounded-full bg-teal-600 animate-pulse" />
-            <span>Clinical Case Log &bull; CHC Khandapada</span>
-          </div>
           <h1 className="text-2xl sm:text-3xl font-black text-slate-900 tracking-tight">
             Case Activity &amp; Audit Trail ({filteredRecords.length})
           </h1>
@@ -430,8 +501,26 @@ export function CaseActivityView({ initialCases = [], onViewCase }: CaseActivity
                     Referred
                   </span>
                 </div>
-                <div className="text-amber-900 font-semibold text-[11px]">
-                  Transferred To: <strong className="text-amber-950">{rec.referalFacility || rec.assignedTo}</strong>
+                <div className="flex items-center gap-2 flex-wrap text-amber-900 font-semibold text-[11px]">
+                  <span>Transferred To: <strong className="text-amber-950">{rec.referalFacility || rec.assignedTo}</strong></span>
+                  {rec.patientReferralStatus === "Accepted" ? (
+                    <span className="px-2 py-0.5 rounded-full text-[10px] font-bold bg-emerald-100 text-emerald-800 border border-emerald-300">
+                      ✓ Patient Accepted
+                    </span>
+                  ) : rec.patientReferralStatus === "Declined" ? (
+                    <span className="px-2 py-0.5 rounded-full text-[10px] font-bold bg-rose-100 text-rose-800 border border-rose-300">
+                      ✕ Patient Declined
+                    </span>
+                  ) : (
+                    <span className="px-2 py-0.5 rounded-full text-[10px] font-bold bg-amber-100 text-amber-800 border border-amber-300">
+                      ⏳ Awaiting Patient Consent
+                    </span>
+                  )}
+                  {rec.facilityReferralStatus === "Accepted" && (
+                    <span className="px-2 py-0.5 rounded-full text-[10px] font-bold bg-sky-100 text-sky-800 border border-sky-300">
+                      ✓ Under Review at Facility
+                    </span>
+                  )}
                 </div>
                 {(rec.transferReason || (rec.notes && rec.notes.trim())) && (
                   <p className="text-slate-700 leading-relaxed text-[11px]">

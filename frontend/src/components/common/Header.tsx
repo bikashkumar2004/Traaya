@@ -27,7 +27,8 @@ export function Header() {
     pathname.startsWith("/doctor") ||
     pathname.startsWith("/organization") ||
     pathname.startsWith("/healthcamp") ||
-    pathname.startsWith("/medical");
+    pathname.startsWith("/medical") ||
+    pathname.startsWith("/facility");
 
   if (isAuthOrRegister) return null;
 
@@ -53,24 +54,25 @@ export function Header() {
       { href: "/doctor/audit", label: "Audit Log" },
     ],
     admin: [
+      { href: "/admin", label: "Admin Console" },
       { href: "/doctor/analytics", label: "Analytics" },
       { href: "/doctor/audit", label: "Compliance Log" },
     ],
     organization: [
       { href: "/organization", label: "Health Dashboard" },
-      { href: "/organization", label: "Student & Employee Telemetry" },
+      { href: "/organization#telemetry", label: "Student & Employee Telemetry" },
     ],
     healthcamp: [
       { href: "/healthcamp", label: "Camp Station" },
-      { href: "/healthcamp", label: "Rapid Intake" },
+      { href: "/healthcamp#intake", label: "Rapid Intake" },
     ],
     facility: [
       { href: "/medical", label: "Dispensary & Pharmacy" },
-      { href: "/medical", label: "Lab Reports" },
+      { href: "/medical#inventory", label: "Drug Inventory" },
     ],
     medical: [
       { href: "/medical", label: "Dispensary & Pharmacy" },
-      { href: "/medical", label: "Lab Reports" },
+      { href: "/medical#inventory", label: "Drug Inventory" },
     ],
   };
 
@@ -105,7 +107,7 @@ export function Header() {
             ) : (
               portalNav.map((item) => (
                 <Link
-                  key={item.href}
+                  key={`${item.href}-${item.label}`}
                   href={item.href}
                   className={`transition-colors ${
                     pathname === item.href ? "text-teal-800 font-bold" : "hover:text-teal-800"
@@ -186,7 +188,7 @@ export function Header() {
         <div className="border-t border-slate-100 bg-slate-50/90 px-4 py-1.5 overflow-x-auto flex gap-1 scrollbar-none max-w-7xl mx-auto">
           {portalNav.map((item) => (
             <Link
-              key={item.href}
+              key={`${item.href}-${item.label}`}
               href={item.href}
               className={`px-3 py-1 rounded-md text-xs whitespace-nowrap font-medium transition-colors ${
                 pathname === item.href

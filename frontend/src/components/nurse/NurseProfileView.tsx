@@ -33,21 +33,21 @@ export function NurseProfileView() {
   const [savedToast, setSavedToast] = useState<string | null>(null);
 
   // Nurse Profile States initialized from user in profiles table
-  const [fullName, setFullName] = useState<string>(user?.fullName || "Nurse Staff");
+  const [fullName, setFullName] = useState<string>(user?.fullName || "");
   const [designation, setDesignation] = useState<string>("Senior Staff Nurse & Triage Specialist");
-  const [phone, setPhone] = useState<string>(user?.phone || "+91 94370 56789");
-  const [email, setEmail] = useState<string>(user?.email || "nurse@health.odisha.gov.in");
+  const [phone, setPhone] = useState<string>(user?.phone || "");
+  const [email, setEmail] = useState<string>(user?.email || "");
   const [hprId, setHprId] = useState<string>("91-8821-4433-2011@hpr");
   
   // STAFF ID: Taken directly from userId stored in profiles table
-  const [staffId, setStaffId] = useState<string>(user?.userId || user?.patientUhid || "NUR-0021");
+  const [staffId, setStaffId] = useState<string>(user?.userId || user?.patientUhid || "");
   
   const [councilReg, setCouncilReg] = useState<string>("ONRC-2018-9941");
-  const [facility, setFacility] = useState<string>(user?.facilityName || "Community Health Centre (CHC) Khandapada");
-  const [district, setDistrict] = useState<string>(user?.district || "Nayagarh, Odisha");
-  const [bloodGroup, setBloodGroup] = useState<string>(user?.bloodGroup || "O+");
-  const [gender, setGender] = useState<string>(user?.gender || "Female");
-  const [dob, setDob] = useState<string>(user?.dateOfBirth || "1994-06-15");
+  const [facility, setFacility] = useState<string>(user?.facilityName || "");
+  const [district, setDistrict] = useState<string>(user?.district || "");
+  const [bloodGroup, setBloodGroup] = useState<string>(user?.bloodGroup || "");
+  const [gender, setGender] = useState<string>(user?.gender || "");
+  const [dob, setDob] = useState<string>(user?.dateOfBirth || "");
   const [shift, setShift] = useState<string>("Morning Roster (08:00 AM - 04:00 PM)");
 
   // Clinical Statistics (Real live numbers loaded directly from database)

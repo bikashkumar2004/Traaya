@@ -231,10 +231,6 @@ export function PatientIntakeWorkflow({ onCaseCreated, onCancel }: PatientIntake
       {/* Top Patient Intake Header like patient page (no box) */}
       <div className="flex flex-col md:flex-row md:items-center justify-between gap-4">
         <div>
-          <div className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full text-xs font-bold bg-teal-50 text-teal-800 border border-teal-200/80 mb-2">
-            <span className="w-2 h-2 rounded-full bg-teal-600 animate-pulse" />
-            <span>Station Workflow &bull; 5-Step Protocol</span>
-          </div>
           <h1 className="text-2xl sm:text-3xl font-black text-slate-900 tracking-tight">
             Patient Intake Station
           </h1>

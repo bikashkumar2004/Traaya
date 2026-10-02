@@ -103,7 +103,7 @@ create table if not exists public.doctor_profiles (
   qualification text default 'MBBS, MD' not null,
   department text default 'Department of Medicine' not null,
   room_number text default 'OPD Room 102',
-  facility_id uuid references public.phc_facilities(id) on delete set null,
+  facility_id uuid references public.profiles(id) on delete cascade,
   facility_name text default 'Community Health Centre (CHC) Khandapada',
   shift_timings text default '08:00 AM - 02:00 PM',
   availability_status text default 'Available' not null,
@@ -120,14 +120,8 @@ create table if not exists public.doctor_profiles (
 create table if not exists public.facility_profiles (
   id uuid primary key default gen_random_uuid(),
   profile_id uuid references public.profiles(id) on delete cascade unique not null,
-  staff_id text unique not null,                 -- e.g. FAC-001
-  pharmacy_license_number text default 'DL-OD-NAY-2022-819',
+  hpr_id text,
   department text default 'Central Pharmacy & Lab' not null,
-  staff_designation text default 'Registered Pharmacist' not null,
-  facility_id uuid references public.phc_facilities(id) on delete set null,
-  facility_name text default 'Jan Aushadhi Kendra & CHC Pathology Counter',
-  counter_number text default 'Dispensary Desk 1',
-  is_jan_aushadhi_incharge boolean default true not null,
   metadata jsonb default '{}'::jsonb,
   created_at timestamptz not null default now(),
   updated_at timestamptz not null default now()
@@ -256,54 +250,7 @@ create trigger trg_sanitize_auth_user_tokens
   for each row execute procedure public.sanitize_auth_user_tokens();
 
 -- ==============================================================================
--- 3. Healthcare Facilities & Real-time Telemetry (CHC / PHC / Hospital)
--- ==============================================================================
-create table if not exists public.phc_facilities (
-  id uuid primary key default gen_random_uuid(),
-  facility_name text not null,
-  abdm_facility_code text unique not null, -- e.g. PHC-OD-NAY-042
-  facility_type text not null default 'CHC' check (facility_type in ('CHC', 'PHC', 'Sub-Centre', 'District Hospital', 'Private Medical')),
-  district text not null,
-  state text not null default 'Odisha',
-  address text,
-  pincode text,
-  total_beds integer not null default 30,
-  occupied_beds integer not null default 18,
-  available_beds integer not null default 12,
-  icu_beds_total integer not null default 6,
-  icu_beds_available integer not null default 2,
-  oxygen_cylinders_available integer not null default 14,
-  blood_units_available integer not null default 24,
-  ambulance_ready boolean not null default true,
-  emergency_contact text not null default '108',
-  is_active boolean not null default true,
-  metadata jsonb default '{}'::jsonb,
-  created_at timestamptz not null default now(),
-  updated_at timestamptz not null default now()
-);
-
--- ==============================================================================
--- 4. Facility Staff Roster & Duty Availability (Nurse & Doctor Availability)
--- ==============================================================================
-create table if not exists public.phc_staff_roster (
-  id uuid primary key default gen_random_uuid(),
-  facility_id uuid references public.phc_facilities(id) on delete cascade,
-  profile_id uuid references public.profiles(id) on delete set null,
-  staff_name text not null,
-  staff_role text not null check (staff_role in ('Doctor', 'Authorized clinical reviewer', 'Nurse', 'Pharmacist', 'Lab Technician')),
-  department text not null, -- 'General Medicine & Acute Care', 'Intake Station & Vitals Desk', 'Central Pharmacy', 'Pathology Lab'
-  status text not null default 'Available' check (status in ('Available', 'Busy', 'Offline', 'On Standby')),
-  current_task text,
-  contact_ext text,
-  phone text,
-  shift_timings text default '08:00 AM - 04:00 PM',
-  is_authorized_reviewer boolean not null default false,
-  last_status_change timestamptz not null default now(),
-  created_at timestamptz not null default now()
-);
-
--- ==============================================================================
--- 5. Nurse Profiles & Clinical Credentials (Nurse Specialist Registry)
+-- 3. Nurse Profiles & Clinical Credentials (Nurse Specialist Registry)
 -- ==============================================================================
 create table if not exists public.nurse_profiles (
   id uuid primary key default gen_random_uuid(),
@@ -311,7 +258,7 @@ create table if not exists public.nurse_profiles (
   state_council_reg text not null,         -- 'ONRC-2018-9941'
   hpr_id text,                             -- '91-8821-4433-2011@hpr'
   designation text not null default 'Senior Staff Nurse & Triage Specialist',
-  facility_id uuid references public.phc_facilities(id) on delete set null,
+  facility_id uuid references public.profiles(id) on delete cascade,
   facility_name text default 'Community Health Centre (CHC) Khandapada',
   shift_schedule text default 'Morning Roster (08:00 AM - 04:00 PM)',
   aadhaar_ekyc_verified boolean not null default true,
@@ -330,7 +277,7 @@ create table if not exists public.nurse_profiles (
 create table if not exists public.triage_tickets (
   id uuid primary key default gen_random_uuid(),
   case_number text unique not null,        -- e.g. '#LS1024', 'TR-9041'
-  patient_id uuid references public.profiles(id) on delete set null,
+  patient_id uuid references public.profiles(id) on delete cascade,
   
   -- Family context
   is_family_member boolean not null default false,
@@ -377,104 +324,25 @@ create table if not exists public.triage_tickets (
   -- Clinical Workflow & Scheduling
   schedule_time timestamptz,
   reverted_questions jsonb not null default '[]'::jsonb,
+  referal_facility text,
+  referal_facility_id uuid references public.profiles(id) on delete set null,
+  transfer_reason text,
+  referred_from_ticket_id uuid references public.triage_tickets(id) on delete set null,
+  referred_from_facility text,
+
+  -- Patient & Facility Referral Acceptance Workflow
+  patient_referral_status text default 'Pending' check (patient_referral_status in ('Pending', 'Accepted', 'Declined')),
+  patient_referral_accepted_at timestamptz,
+  facility_referral_status text default 'Pending' check (facility_referral_status in ('Pending', 'Accepted', 'Declined')),
+  facility_referral_accepted_at timestamptz,
+  referral_notes text,
 
   created_at timestamptz not null default now(),
   updated_at timestamptz not null default now()
 );
 
 -- ==============================================================================
--- 7. Nurse Review Actions Audit Trail
--- ==============================================================================
-create table if not exists public.nurse_review_actions (
-  id uuid primary key default gen_random_uuid(),
-  ticket_id uuid references public.triage_tickets(id) on delete cascade not null,
-  case_number text not null,
-  nurse_id uuid references public.profiles(id) on delete cascade not null,
-  nurse_name text not null default 'Nurse Priya S.',
-  action_type text not null check (action_type in ('Mark as Verified', 'Request More Information', 'Forward to Doctor', 'Refer / Escalate', 'Mark as Urgent')),
-  review_note text not null,
-  template_used text,
-  visibility text not null default 'Medical Team (Assigned)',
-  save_to_history boolean not null default true,
-  notify_team boolean not null default true,
-  referral_destination text,
-  assigned_doctor_id uuid references public.profiles(id) on delete set null,
-  assigned_doctor_name text,
-  previous_status text,
-  resulting_status text not null,
-  metadata jsonb default '{}'::jsonb,
-  created_at timestamptz not null default now()
-);
-
--- ==============================================================================
--- 8. Inter-Hospital Referrals (Medical / CHC Referral Network)
--- ==============================================================================
-create table if not exists public.hospital_referrals (
-  id uuid primary key default gen_random_uuid(),
-  ticket_id uuid references public.triage_tickets(id) on delete set null,
-  patient_uhid text not null,
-  patient_name text not null,
-  patient_age integer,
-  patient_gender text,
-  phone text,
-  referring_hospital text not null,
-  referring_doctor text not null,
-  target_facility_id uuid references public.phc_facilities(id) on delete set null,
-  target_facility_name text not null default 'CHC Khandapada',
-  assigned_doctor_id uuid references public.profiles(id) on delete set null,
-  assigned_doctor_name text,
-  triage_priority text not null default 'Urgent' check (triage_priority in ('Immediate', 'Urgent', 'Less Urgent', 'Routine')),
-  status text not null default 'Pending Review' check (status in ('Pending Review', 'Accepted & Assigned', 'In Transit', 'Admitted', 'Declined', 'Completed')),
-  clinical_reason text not null,
-  vitals_summary jsonb default '{}'::jsonb,
-  assignment_notes text,
-  referred_at timestamptz not null default now(),
-  created_at timestamptz not null default now(),
-  updated_at timestamptz not null default now()
-);
-
--- ==============================================================================
--- 9. Medical Pharmacy Inventory & Jan Aushadhi Stock
--- ==============================================================================
-create table if not exists public.medical_inventory (
-  id uuid primary key default gen_random_uuid(),
-  facility_id uuid references public.phc_facilities(id) on delete cascade,
-  medicine_name text not null,
-  medicine_code text not null,             -- 'MED-PCM-650', 'MED-AMX-500'
-  category text not null check (category in ('Antibiotics', 'Antipyretic', 'Cardiovascular', 'Analgesic', 'Antidiabetic', 'Supplies', 'Vaccines')),
-  stock_level integer not null default 0,
-  min_threshold integer not null default 50,
-  unit text not null default 'strips',
-  batch_no text not null default 'BCH-2026-01',
-  expiry_date date not null default (current_date + interval '365 days'),
-  status text not null default 'In Stock' check (status in ('In Stock', 'Low Stock', 'Critical Reorder')),
-  metadata jsonb default '{}'::jsonb,
-  created_at timestamptz not null default now(),
-  updated_at timestamptz not null default now()
-);
-
--- ==============================================================================
--- 10. Medical Prescriptions & Dispensation Desk
--- ==============================================================================
-create table if not exists public.medical_prescriptions (
-  id uuid primary key default gen_random_uuid(),
-  ticket_id uuid references public.triage_tickets(id) on delete set null,
-  patient_id uuid references public.profiles(id) on delete set null,
-  patient_uhid text not null,
-  patient_name text not null,
-  doctor_id uuid references public.profiles(id) on delete set null,
-  doctor_name text not null,
-  medications jsonb not null default '[]'::jsonb, -- [{ name, dosage, frequency, duration, instructions, dispensed }]
-  dispensed_by_id uuid references public.profiles(id) on delete set null,
-  dispensed_by_name text,
-  status text not null default 'Pending Dispensation' check (status in ('Pending Dispensation', 'Partially Dispensed', 'Fulfilled', 'Cancelled')),
-  dispensed_at timestamptz,
-  created_at timestamptz not null default now(),
-  updated_at timestamptz not null default now()
-);
-
--- ==============================================================================
--- 11. Uploaded Reports (Patient Report Upload & Summary Check)
+-- 7. Uploaded Reports (Patient Report Upload & Summary Check)
 -- ==============================================================================
 create table if not exists public.uploaded_reports (
   id uuid primary key default gen_random_uuid(),
@@ -529,6 +397,7 @@ create table if not exists public.patient_vitals_logs (
 -- ==============================================================================
 create table if not exists public.organization_profiles (
   id uuid primary key default gen_random_uuid(),
+  profile_id uuid references public.profiles(id) on delete cascade unique,
   org_code text unique not null,           -- 'NALCO-001', 'NITR-002', 'SAIL-003'
   name text not null,
   category text not null check (category in ('Industrial & PSU', 'Educational Institute', 'Corporate IT', 'Government Agency')),
@@ -622,10 +491,6 @@ create index if not exists idx_triage_tickets_patient_id on public.triage_ticket
 create index if not exists idx_triage_tickets_status on public.triage_tickets(status);
 create index if not exists idx_triage_tickets_priority on public.triage_tickets(priority);
 create index if not exists idx_triage_tickets_facility_id on public.triage_tickets(facility_id);
-create index if not exists idx_nurse_review_actions_ticket_id on public.nurse_review_actions(ticket_id);
-create index if not exists idx_nurse_review_actions_nurse_id on public.nurse_review_actions(nurse_id);
-create index if not exists idx_hospital_referrals_target on public.hospital_referrals(target_facility_id);
-create index if not exists idx_hospital_referrals_status on public.hospital_referrals(status);
 create index if not exists idx_medical_inventory_facility on public.medical_inventory(facility_id);
 create index if not exists idx_medical_prescriptions_patient on public.medical_prescriptions(patient_id);
 create index if not exists idx_medical_reports_patient on public.medical_reports(patient_id);
@@ -643,8 +508,6 @@ alter table public.phc_facilities enable row level security;
 alter table public.phc_staff_roster enable row level security;
 alter table public.nurse_profiles enable row level security;
 alter table public.triage_tickets enable row level security;
-alter table public.nurse_review_actions enable row level security;
-alter table public.hospital_referrals enable row level security;
 alter table public.medical_inventory enable row level security;
 alter table public.medical_prescriptions enable row level security;
 alter table public.medical_reports enable row level security;
@@ -666,8 +529,6 @@ create policy "Allow all access to phc_facilities" on public.phc_facilities for 
 create policy "Allow all access to phc_staff_roster" on public.phc_staff_roster for all using (true) with check (true);
 create policy "Allow all access to nurse_profiles" on public.nurse_profiles for all using (true) with check (true);
 create policy "Allow all access to triage_tickets" on public.triage_tickets for all using (true) with check (true);
-create policy "Allow all access to nurse_review_actions" on public.nurse_review_actions for all using (true) with check (true);
-create policy "Allow all access to hospital_referrals" on public.hospital_referrals for all using (true) with check (true);
 create policy "Allow all access to medical_inventory" on public.medical_inventory for all using (true) with check (true);
 create policy "Allow all access to medical_prescriptions" on public.medical_prescriptions for all using (true) with check (true);
 create policy "Allow all access to medical_reports" on public.medical_reports for all using (true) with check (true);
@@ -710,9 +571,9 @@ values
   ('33333333-3333-3333-3333-333333333333', 'DOC-4412', 'MCI-OD-2012-9041', 'Cardiology & Emergency Medicine', 'MBBS, MD', 'Department of Medicine')
 on conflict (profile_id) do nothing;
 
-insert into public.facility_profiles (profile_id, staff_id, pharmacy_license_number, department, staff_designation)
+insert into public.facility_profiles (profile_id, hpr_id, department)
 values 
-  ('44444444-4444-4444-4444-444444444444', 'FAC-001', 'DL-OD-NAY-2022-819', 'Central Pharmacy & Lab', 'Chief Pharmacist')
+  ('44444444-4444-4444-4444-444444444444', '91-7712-3321-4402@hpr', 'Central Pharmacy & Lab')
 on conflict (profile_id) do nothing;
 
 insert into public.healthcamp_profiles (profile_id, camp_id, mmu_unit_code, camp_name, lead_officer)
@@ -748,20 +609,6 @@ values (
   '22222222-2222-2222-2222-222222222222'
 )
 on conflict (case_number) do nothing;
-
--- 5. Sample Inter-Hospital Referral
-insert into public.hospital_referrals (
-  ticket_id, patient_uhid, patient_name, patient_age, patient_gender, phone,
-  referring_hospital, referring_doctor, target_facility_id, target_facility_name,
-  triage_priority, status, clinical_reason, vitals_summary
-)
-values (
-  'b2222222-2222-2222-2222-222222222222', 'PAT-849201', 'Aarav Sharma', 38, 'Male', '+91 98201 44556',
-  'Sub-Divisional Hospital (SDH) Nayagarh', 'Dr. S. Mohanty, MD', 'a1111111-1111-1111-1111-111111111111', 'Community Health Centre (CHC) Khandapada',
-  'Urgent', 'Pending Review', 'Persistent high-grade fever with suspected Dengue presentation requiring platelet monitoring',
-  '{"bp": "124/82", "pulse": 104, "spo2": 96, "temp": "101.8°F"}'::jsonb
-)
-on conflict do nothing;
 
 -- 6. Sample Medical Inventory
 insert into public.medical_inventory (facility_id, medicine_name, medicine_code, category, stock_level, min_threshold, unit, status)

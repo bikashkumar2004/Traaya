@@ -6,7 +6,6 @@ from dotenv import load_dotenv
 load_dotenv('backend/.env')
 conn = psycopg2.connect(os.getenv('DATABASE_URL'))
 cur = conn.cursor()
-cur.execute("DELETE FROM nurse_review_actions WHERE case_number = '#LS9999';")
 cur.execute("DELETE FROM triage_tickets WHERE case_number = '#LS9999';")
 conn.commit()
 cur.close()
@@ -82,7 +81,6 @@ async def run_verification():
     # Clean up test ticket and its child action log
     conn2 = psycopg2.connect(os.getenv('DATABASE_URL'))
     cur2 = conn2.cursor()
-    cur2.execute("DELETE FROM nurse_review_actions WHERE case_number = '#LS9999';")
     cur2.execute("DELETE FROM triage_tickets WHERE case_number = '#LS9999';")
     conn2.commit()
     cur2.close()

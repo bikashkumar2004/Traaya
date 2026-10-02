@@ -93,6 +93,9 @@ interface TriageTicket {
   };
   status: string;
   created_at: string;
+  patient_referral_status?: string;
+  facility_referral_status?: string;
+  referal_facility?: string;
 }
 
 export default function PatientTimelinePage() {
@@ -103,6 +106,17 @@ export default function PatientTimelinePage() {
   const [activeStatusFilter, setActiveStatusFilter] = useState<string>("all");
   const [searchTerm, setSearchTerm] = useState<string>("");
   const [copiedId, setCopiedId] = useState<string | null>(null);
+
+  // Hydrate cached tickets from sessionStorage on mount (client-only)
+  useEffect(() => {
+    try {
+      const cached = sessionStorage.getItem("triage_cached_tickets");
+      if (cached) {
+        setTickets(JSON.parse(cached));
+        setLoading(false);
+      }
+    } catch {}
+  }, []);
 
   // Fetch tickets on mount
   useEffect(() => {
@@ -139,6 +153,9 @@ export default function PatientTimelinePage() {
 
         if (fetchedTickets) {
           setTickets(fetchedTickets);
+          if (typeof window !== "undefined") {
+            sessionStorage.setItem("triage_cached_tickets", JSON.stringify(fetchedTickets));
+          }
         } else {
           setError("Failed to fetch timeline data");
         }
@@ -220,7 +237,7 @@ export default function PatientTimelinePage() {
     return result;
   }, [tickets, activeStatusFilter, searchTerm]);
 
-  const getStatusBadge = (status: string) => {
+  const getStatusBadge = (status: string, ticketItem?: TriageTicket) => {
     const norm = normalizeStatus(status);
     switch (norm) {
       case "Draft":
@@ -246,10 +263,25 @@ export default function PatientTimelinePage() {
         );
       case "Referred":
         return (
-          <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-bold bg-purple-50 text-purple-800 border border-purple-300">
-            <Share2 className="w-3.5 h-3.5 text-purple-600" />
-            Referred
-          </span>
+          <div className="flex flex-col gap-1 items-start">
+            <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-bold bg-purple-50 text-purple-800 border border-purple-300">
+              <Share2 className="w-3.5 h-3.5 text-purple-600" />
+              Referred
+            </span>
+            {ticketItem?.patient_referral_status === "Accepted" ? (
+              <span className="text-[10px] font-bold text-emerald-700 bg-emerald-50 px-1.5 py-0.5 rounded border border-emerald-200">
+                ✓ Consent Given
+              </span>
+            ) : ticketItem?.patient_referral_status === "Declined" ? (
+              <span className="text-[10px] font-bold text-rose-700 bg-rose-50 px-1.5 py-0.5 rounded border border-rose-200">
+                ✕ Declined
+              </span>
+            ) : (
+              <span className="text-[10px] font-bold text-amber-800 bg-amber-50 px-1.5 py-0.5 rounded border border-amber-300 animate-pulse">
+                Consent Needed
+              </span>
+            )}
+          </div>
         );
       case "Scheduled":
         return (
@@ -311,10 +343,6 @@ export default function PatientTimelinePage() {
       {/* Title & Actions Header */}
       <div className="flex flex-col md:flex-row md:items-center justify-between gap-4">
         <div>
-          <div className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full text-xs font-bold bg-teal-50 text-teal-800 border border-teal-200/80 mb-2">
-            <ShieldCheck className="w-3 h-3 text-teal-600" />
-            <span>PHR CASE REGISTRY</span>
-          </div>
           <h1 className="text-2xl sm:text-3xl font-black text-slate-900 tracking-tight">
             My Timeline &amp; Clinical Visits
           </h1>
@@ -855,7 +883,7 @@ export default function PatientTimelinePage() {
 
                       {/* Status */}
                       <td className="py-4 px-4 whitespace-nowrap">
-                        {getStatusBadge(ticket.status)}
+                        {getStatusBadge(ticket.status, ticket)}
                       </td>
 
                       {/* View & Answer Action */}

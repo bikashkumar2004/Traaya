@@ -401,16 +401,16 @@ export function DoctorShell({
                         .slice(0, 2)
                         .join("")
                         .toUpperCase()
-                    : "KV"}
+                    : "DR"}
                 </div>
                 <span className="absolute bottom-0 right-0 w-2.5 h-2.5 bg-emerald-500 border-2 border-white rounded-full" />
               </div>
               <div className="hidden sm:block text-left leading-tight">
                 <div className="text-xs font-bold text-slate-900">
-                  {user?.fullName || "Dr. Kavita Verma"}
+                  {user?.fullName || "Doctor"}
                 </div>
                 <div className="text-[10px] text-slate-500 font-medium">
-                  Doctor &bull; CHC Khandapada
+                  {user?.userId ? `ID: ${user.userId}` : "Doctor"} &bull; {user?.facilityName || "CHC Khandapada"}
                 </div>
               </div>
             </button>

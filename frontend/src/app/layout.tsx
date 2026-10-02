@@ -20,20 +20,32 @@ const inter = Inter({
   display: "swap",
 });
 
+import { cookies } from "next/headers";
+import { UserProfile } from "@/lib/auth-context";
+
 export const metadata: Metadata = {
   title: "TriageAssist — Clinical Calm & Precision Triage Platform",
   description: "AI-Assisted Primary Healthcare Triage & Patient Flow for Community Clinics and District Hospitals in India",
 };
 
-export default function RootLayout({
+export default async function RootLayout({
   children,
 }: Readonly<{
   children: React.ReactNode;
 }>) {
+  const cookieStore = await cookies();
+  let initialUser: UserProfile | null = null;
+  const userCookie = cookieStore.get("triage_user_display")?.value;
+  if (userCookie) {
+    try {
+      initialUser = JSON.parse(decodeURIComponent(userCookie));
+    } catch {}
+  }
+
   return (
     <html lang="en" suppressHydrationWarning className={`${plusJakartaSans.variable} ${inter.variable} h-full antialiased`}>
       <body suppressHydrationWarning className="min-h-full flex flex-col bg-slate-50 text-slate-900 font-sans selection:bg-teal-200 selection:text-teal-950">
-        <AuthProvider>
+        <AuthProvider initialUser={initialUser}>
           <Header />
           <MainContainer>
             {children}

@@ -1,6 +1,12 @@
 "use client";
 
-import React, { useState } from "react";
+import React, { useState, useEffect } from "react";
+import {
+  fetchDoctorsForFacility,
+  fetchRegisteredFacilities,
+  FacilityDoctorOption,
+  RegisteredFacilityOption,
+} from "@/lib/nurse-api";
 import {
   ArrowLeft,
   Edit2,
@@ -45,6 +51,9 @@ export interface CaseDetails {
   status: string;
   chiefComplaint: string;
   nurseName?: string;
+  nurseId?: string;
+  doctorName?: string;
+  doctorId?: string;
   aiInfo: {
     symptoms: string[];
     duration: string;
@@ -61,26 +70,27 @@ export interface CaseDetails {
   };
   facility: string;
   facilityLocation: string;
+  facilityId?: string;
   consultationMode?: string;
   scheduleTime?: string;
   revertedQuestions?: { id: string; question: string; answer?: string; answered_at?: string }[];
   referalFacility?: string;
   referalFacilityId?: string;
   transferReason?: string;
+  referredFromTicketId?: string;
+  referredFromFacility?: string;
+  patientReferralStatus?: "Pending" | "Accepted" | "Declined";
+  patientReferralAcceptedAt?: string;
+  facilityReferralStatus?: "Pending" | "Accepted" | "Declined";
+  facilityReferralAcceptedAt?: string;
+  referralNotes?: string;
   intakeMode?: "new" | "existing";
   existingPatientId?: string;
   existingPatientSource?: "new_patient" | "profile";
   newPatientId?: string;
+  uploadedReportUrl?: string;
+  uploadedReportData?: any;
 }
-
-export const DOCTOR_OPTIONS = [
-  { name: "Dr. Ananya Sen, MD", role: "General Medicine / Attending Physician", room: "OPD Room 102" },
-  { name: "Dr. Kavita Verma, MD", role: "Emergency Medicine / CMO", room: "OPD Bay 1" },
-  { name: "Dr. Rajesh Patel, MD", role: "Pediatrics & Child Health", room: "OPD Room 104" },
-  { name: "Dr. Priya Nair, MS", role: "Obstetrics & Gynecology", room: "OPD Room 106" },
-  { name: "Dr. Vikram Rathore, MS", role: "Orthopedics & Trauma Surgery", room: "OPD Room 108" },
-  { name: "Dr. Arun Kumar, MBBS", role: "General OPD Medical Officer", room: "OPD Room 101" },
-];
 
 export const FACILITY_OPTIONS = [
   { name: "District Headquarters Hospital (DHH) Nayagarh", type: "District Hospital / Tertiary Referral", distance: "18 km" },
@@ -102,7 +112,9 @@ interface CaseReviewWorkspaceProps {
     scheduleTime?: string,
     revertedQuestions?: { id: string; question: string; answer?: string; answered_at?: string }[],
     assignedDoctor?: string,
-    referralFacility?: string
+    referralFacility?: string,
+    assignedDoctorId?: string,
+    referralFacilityId?: string
   ) => void;
 }
 
@@ -119,10 +131,78 @@ export function CaseReviewWorkspace({
     const pad = (n: number) => String(n).padStart(2, "0");
     return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}T${pad(d.getHours())}:${pad(d.getMinutes())}`;
   });
-  const [assignedDoctor, setAssignedDoctor] = useState<string>("Dr. Ananya Sen, MD");
+  const [assignedDoctor, setAssignedDoctor] = useState<string>("");
+  const [assignedDoctorId, setAssignedDoctorId] = useState<string | undefined>(undefined);
   const [customDoctor, setCustomDoctor] = useState<string>("");
-  const [referralFacility, setReferralFacility] = useState<string>("District Headquarters Hospital (DHH) Nayagarh");
-  const [customFacility, setCustomFacility] = useState<string>("");
+  const [facilityDoctors, setFacilityDoctors] = useState<FacilityDoctorOption[]>([]);
+  const [loadingDoctors, setLoadingDoctors] = useState<boolean>(true);
+
+  // Real registered facilities from database
+  const [availableFacilities, setAvailableFacilities] = useState<RegisteredFacilityOption[]>([]);
+  const [loadingFacilities, setLoadingFacilities] = useState<boolean>(true);
+  const [referralFacilityId, setReferralFacilityId] = useState<string>("");
+  const [referralFacility, setReferralFacility] = useState<string>("");
+
+  // Fetch real doctors belonging to the same healthcare facility
+  useEffect(() => {
+    let isMounted = true;
+    async function loadDoctors() {
+      setLoadingDoctors(true);
+      try {
+        const docs = await fetchDoctorsForFacility(caseData.facilityId, caseData.facility);
+        if (isMounted) {
+          setFacilityDoctors(docs);
+          if (docs.length > 0) {
+            setAssignedDoctor(docs[0].name);
+            setAssignedDoctorId(docs[0].id);
+          } else {
+            setAssignedDoctor("Other");
+            setAssignedDoctorId(undefined);
+          }
+        }
+      } catch (err) {
+        console.warn("[CaseReview] Error loading facility doctors:", err);
+      } finally {
+        if (isMounted) setLoadingDoctors(false);
+      }
+    }
+    loadDoctors();
+    return () => {
+      isMounted = false;
+    };
+  }, [caseData.facilityId, caseData.facility]);
+
+  // Fetch real registered facilities strictly from database
+  useEffect(() => {
+    let isMounted = true;
+    async function loadFacilities() {
+      setLoadingFacilities(true);
+      try {
+        const facs = await fetchRegisteredFacilities();
+        if (isMounted) {
+          setAvailableFacilities(facs);
+          if (facs.length > 0) {
+            // Default to case's referalFacilityId or first registered facility
+            const defaultFac =
+              (caseData.referalFacilityId && facs.find((f) => f.id === caseData.referalFacilityId)) ||
+              (caseData.referalFacility && facs.find((f) => f.name.toLowerCase().includes(caseData.referalFacility!.toLowerCase()))) ||
+              facs[0];
+            setReferralFacilityId(defaultFac.id);
+            setReferralFacility(defaultFac.name);
+          }
+        }
+      } catch (err) {
+        console.warn("[CaseReview] Error loading registered facilities:", err);
+      } finally {
+        if (isMounted) setLoadingFacilities(false);
+      }
+    }
+    loadFacilities();
+    return () => {
+      isMounted = false;
+    };
+  }, [caseData.referalFacilityId, caseData.referalFacility]);
+
   const [referralReason, setReferralReason] = useState<string>("");
   const [resolveNote, setResolveNote] = useState<string>(
     "Case clinical verification completed at PHC triage desk. Symptoms evaluated and resolved."
@@ -226,16 +306,39 @@ export function CaseReviewWorkspace({
           ? (assignedDoctor === "Other" ? (customDoctor.trim() || "Attending Medical Officer") : assignedDoctor)
           : undefined;
 
+      let finalDoctorId =
+        selectedAction === "Schedule & Forward to Doctor"
+          ? (assignedDoctor === "Other" ? undefined : assignedDoctorId)
+          : undefined;
+
+      // Fallback matching if assignedDoctorId is not yet resolved
+      if (selectedAction === "Schedule & Forward to Doctor" && !finalDoctorId && facilityDoctors.length > 0) {
+        const found = facilityDoctors.find(
+          (d) => d.name === finalDoctor || d.name === assignedDoctor
+        );
+        if (found) {
+          finalDoctorId = found.profileId || found.id;
+        } else if (assignedDoctor !== "Other") {
+          finalDoctorId = facilityDoctors[0].profileId || facilityDoctors[0].id;
+        }
+      }
+
+      const selectedFacObj = availableFacilities.find((f) => f.id === referralFacilityId);
       const finalFacility =
         selectedAction === "Refer / Escalate"
-          ? (referralFacility === "Other" ? (customFacility.trim() || "District Hospital") : referralFacility)
+          ? (selectedFacObj?.name || referralFacility || "Referral Healthcare Facility")
+          : undefined;
+
+      const finalFacilityId =
+        selectedAction === "Refer / Escalate"
+          ? (referralFacilityId || selectedFacObj?.id)
           : undefined;
 
       const finalNote =
         selectedAction === "Resolve"
           ? resolveNote
           : selectedAction === "Refer / Escalate"
-          ? (referralReason.trim() ? `Referral to ${finalFacility}: ${referralReason.trim()}` : `Referred to ${finalFacility}`)
+          ? referralReason.trim()
           : "";
 
       onSubmitAction(
@@ -245,7 +348,9 @@ export function CaseReviewWorkspace({
         scheduledIso,
         revertedQJson,
         finalDoctor,
-        finalFacility
+        finalFacility,
+        finalDoctorId,
+        finalFacilityId
       );
     }, 900);
   };
@@ -523,25 +628,27 @@ export function CaseReviewWorkspace({
                 </ul>
               </div>
 
-              {/* Missing Details Warning Banner (Image 4) */}
-              <div className="bg-amber-50/80 border border-amber-200/90 rounded-2xl p-4 flex flex-col sm:flex-row sm:items-center justify-between gap-3">
-                <div className="flex items-start gap-2.5 text-xs text-amber-900">
-                  <AlertTriangle className="w-4 h-4 text-amber-600 shrink-0 mt-0.5" />
-                  <div>
-                    <span className="font-bold">Some important details are missing:</span>{" "}
-                    {caseData.missingDetails.join(", ")}.
+              {/* Missing Details Warning Banner (Only show if missing details exist) */}
+              {caseData.missingDetails && caseData.missingDetails.length > 0 && (
+                <div className="bg-amber-50/80 border border-amber-200/90 rounded-2xl p-4 flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+                  <div className="flex items-start gap-2.5 text-xs text-amber-900">
+                    <AlertTriangle className="w-4 h-4 text-amber-600 shrink-0 mt-0.5" />
+                    <div>
+                      <span className="font-bold">Some important details are missing:</span>{" "}
+                      {caseData.missingDetails.join(", ")}.
+                    </div>
                   </div>
+                  <button
+                    type="button"
+                    onClick={() => setMissingModalOpen(true)}
+                    className="px-3 py-1.5 bg-white border border-amber-300 hover:bg-amber-100/50 text-amber-900 font-bold text-xs rounded-xl shadow-2xs shrink-0 transition-colors cursor-pointer"
+                  >
+                    View missing details
+                  </button>
                 </div>
-                <button
-                  type="button"
-                  onClick={() => setMissingModalOpen(true)}
-                  className="px-3 py-1.5 bg-white border border-amber-300 hover:bg-amber-100/50 text-amber-900 font-bold text-xs rounded-xl shadow-2xs shrink-0 transition-colors cursor-pointer"
-                >
-                  View missing details
-                </button>
-              </div>
+              )}
 
-              {/* Medical Reports & AI Analysis Side-by-Side Cards (Image 4) */}
+              {/* Medical Reports & AI Analysis Side-by-Side Cards */}
               <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
                 {/* Reports Card */}
                 <div className="bg-white rounded-2xl border border-slate-200 p-5 shadow-xs space-y-3">
@@ -550,28 +657,56 @@ export function CaseReviewWorkspace({
                     <span>Medical Reports ({caseData.reports.length})</span>
                   </div>
 
-                  <div className="p-3 bg-slate-50 rounded-xl border border-slate-200 flex items-center justify-between">
-                    <div className="flex items-center gap-2.5 min-w-0">
-                      <div className="w-8 h-8 rounded-lg bg-teal-100 text-teal-800 flex items-center justify-center shrink-0">
-                        <FileText className="w-4 h-4" />
-                      </div>
-                      <div className="min-w-0">
-                        <div className="text-xs font-bold text-slate-800 truncate">
-                          {caseData.reports[0] || "blood_test_report.jpeg"}
-                        </div>
-                        <div className="text-[10px] text-slate-400">
-                          Uploaded 10:28 AM
-                        </div>
+                  {caseData.reports.length === 0 ? (
+                    <div className="p-3.5 bg-slate-50 rounded-xl border border-dashed border-slate-200 flex items-center gap-2.5 text-slate-500">
+                      <FileText className="w-4 h-4 text-slate-400 shrink-0" />
+                      <div>
+                        <div className="text-xs font-medium text-slate-600">No medical reports attached</div>
+                        <div className="text-[10px] text-slate-400">Patient did not upload any external lab/diagnostic documents</div>
                       </div>
                     </div>
-                    <button
-                      type="button"
-                      onClick={() => setReportModalOpen(true)}
-                      className="px-2.5 py-1 bg-white border border-slate-200 hover:bg-slate-100 text-slate-700 font-bold text-xs rounded-lg shadow-2xs transition-colors cursor-pointer"
-                    >
-                      View
-                    </button>
-                  </div>
+                  ) : (
+                    <div className="space-y-2">
+                      {caseData.reports.map((repName, idx) => (
+                        <div
+                          key={idx}
+                          className="p-3 bg-slate-50 rounded-xl border border-slate-200 flex items-center justify-between gap-2"
+                        >
+                          <div className="flex items-center gap-2.5 min-w-0">
+                            <div className="w-8 h-8 rounded-lg bg-teal-100 text-teal-800 flex items-center justify-center shrink-0">
+                              <FileText className="w-4 h-4" />
+                            </div>
+                            <div className="min-w-0">
+                              <div className="text-xs font-bold text-slate-800 truncate" title={repName}>
+                                {repName}
+                              </div>
+                              <div className="text-[10px] text-slate-400">
+                                {caseData.submittedTime ? `Submitted ${caseData.submittedTime}` : "Uploaded with intake"}
+                              </div>
+                            </div>
+                          </div>
+                          {caseData.uploadedReportUrl ? (
+                            <a
+                              href={caseData.uploadedReportUrl}
+                              target="_blank"
+                              rel="noopener noreferrer"
+                              className="px-2.5 py-1 bg-white border border-slate-200 hover:bg-slate-100 text-slate-700 font-bold text-xs rounded-lg shadow-2xs transition-colors shrink-0"
+                            >
+                              View
+                            </a>
+                          ) : (
+                            <button
+                              type="button"
+                              onClick={() => setReportModalOpen(true)}
+                              className="px-2.5 py-1 bg-white border border-slate-200 hover:bg-slate-100 text-slate-700 font-bold text-xs rounded-lg shadow-2xs transition-colors cursor-pointer shrink-0"
+                            >
+                              View
+                            </button>
+                          )}
+                        </div>
+                      ))}
+                    </div>
+                  )}
                 </div>
 
                 {/* AI Report Analysis Card */}
@@ -583,27 +718,36 @@ export function CaseReviewWorkspace({
                     </div>
                   </div>
 
-                  <ul className="space-y-1 text-xs text-slate-700">
-                    {caseData.aiReportAnalysis.map((item, i) => (
-                      <li key={i} className="flex items-start gap-1.5">
-                        <span className="w-1.5 h-1.5 rounded-full bg-emerald-500 mt-1.5 shrink-0" />
-                        <span className="text-[11px] leading-tight">{item}</span>
-                      </li>
-                    ))}
-                  </ul>
+                  {caseData.aiReportAnalysis && caseData.aiReportAnalysis.length > 0 ? (
+                    <>
+                      <ul className="space-y-1 text-xs text-slate-700">
+                        {caseData.aiReportAnalysis.map((item, i) => (
+                          <li key={i} className="flex items-start gap-1.5">
+                            <span className="w-1.5 h-1.5 rounded-full bg-emerald-500 mt-1.5 shrink-0" />
+                            <span className="text-[11px] leading-tight">{item}</span>
+                          </li>
+                        ))}
+                      </ul>
 
-                  <button
-                    type="button"
-                    onClick={() => setActiveTab("Medical Reports")}
-                    className="text-[11px] font-bold text-teal-700 hover:text-teal-800 flex items-center gap-1 cursor-pointer pt-1"
-                  >
-                    <span>View full analysis</span>
-                    <span>&rarr;</span>
-                  </button>
+                      <button
+                        type="button"
+                        onClick={() => setActiveTab("Medical Reports")}
+                        className="text-[11px] font-bold text-teal-700 hover:text-teal-800 flex items-center gap-1 cursor-pointer pt-1"
+                      >
+                        <span>View full analysis</span>
+                        <span>&rarr;</span>
+                      </button>
+                    </>
+                  ) : (
+                    <div className="p-3.5 bg-slate-50 rounded-xl border border-dashed border-slate-200 text-xs text-slate-500">
+                      <div className="font-medium text-slate-600">No lab reports attached</div>
+                      <div className="text-[10px] text-slate-400 mt-0.5">Automated OCR and lab panel parsing will activate when documents are uploaded.</div>
+                    </div>
+                  )}
                 </div>
               </div>
 
-              {/* Current Triage Status & Assigned Facility Cards (Image 4 bottom) */}
+              {/* Current Triage Status & Assigned Facility Cards */}
               <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
                 {/* Triage Status */}
                 <div className="bg-white rounded-2xl border border-slate-200 p-5 shadow-xs space-y-2">
@@ -612,13 +756,28 @@ export function CaseReviewWorkspace({
                     <span>Current Triage Status (AI Suggestion)</span>
                   </div>
                   <div>
-                    <span className="inline-flex items-center gap-1.5 px-3 py-1 rounded-xl text-xs font-extrabold bg-amber-100 text-amber-900 border border-amber-300">
-                      <AlertTriangle className="w-3.5 h-3.5 text-amber-700" />
-                      <span>{caseData.aiSuggestion.priority}</span>
-                    </span>
+                    {(() => {
+                      const p = (caseData.aiSuggestion?.priority || caseData.urgency || "Yellow").toLowerCase();
+                      const isRed = p.includes("red") || p.includes("immediate");
+                      const isGreen = p.includes("green") || p.includes("less urgent") || p.includes("routine");
+                      const badgeClass = isRed
+                        ? "bg-rose-100 text-rose-900 border-rose-300"
+                        : isGreen
+                        ? "bg-emerald-100 text-emerald-900 border-emerald-300"
+                        : "bg-amber-100 text-amber-900 border-amber-300";
+                      const Icon = isRed ? ShieldAlert : isGreen ? CheckCircle2 : AlertTriangle;
+                      const iconColor = isRed ? "text-rose-700" : isGreen ? "text-emerald-700" : "text-amber-700";
+
+                      return (
+                        <span className={`inline-flex items-center gap-1.5 px-3 py-1 rounded-xl text-xs font-extrabold border ${badgeClass}`}>
+                          <Icon className={`w-3.5 h-3.5 ${iconColor}`} />
+                          <span>{caseData.aiSuggestion?.priority || caseData.urgency || "Yellow"}</span>
+                        </span>
+                      );
+                    })()}
                   </div>
-                  <p className="text-xs text-slate-600">
-                    {caseData.aiSuggestion.reason}
+                  <p className="text-xs text-slate-600 leading-relaxed">
+                    {caseData.aiSuggestion?.reason || "Clinical triage assessment recommended."}
                   </p>
                 </div>
 
@@ -642,7 +801,7 @@ export function CaseReviewWorkspace({
                   <div className="pt-2 flex justify-end">
                     <button
                       type="button"
-                      onClick={() => alert("Reassigning CHC / PHC center")}
+                      onClick={() => alert(`Assigned Facility: ${caseData.facility} (${caseData.facilityLocation})`)}
                       className="px-3 py-1 bg-slate-100 hover:bg-slate-200 text-slate-700 font-bold text-xs rounded-lg transition-colors cursor-pointer"
                     >
                       Change
@@ -728,40 +887,53 @@ export function CaseReviewWorkspace({
           {activeTab === "Medical Reports" && (
             <div className="bg-white rounded-2xl border border-slate-200 p-6 shadow-xs space-y-4">
               <h2 className="text-sm font-bold text-slate-900">
-                Diagnostic Documents & Automated Lab Parser
+                Diagnostic Documents &amp; Automated Lab Parser
               </h2>
-              <div className="p-4 border border-slate-200 rounded-xl bg-slate-50 text-xs space-y-3">
-                <div className="flex items-center justify-between">
-                  <span className="font-bold text-slate-800">
-                    Complete Blood Count (CBC) Panel &bull; blood_test_report.jpeg
-                  </span>
-                  <span className="text-emerald-700 font-bold bg-emerald-50 px-2 py-0.5 rounded border border-emerald-200">
-                    Extracted via OCR
-                  </span>
+              {caseData.reports.length === 0 ? (
+                <div className="p-8 text-center bg-slate-50 rounded-2xl border border-dashed border-slate-200 space-y-2">
+                  <FileText className="w-10 h-10 text-slate-300 mx-auto" />
+                  <div className="text-sm font-bold text-slate-700">No Medical Reports Uploaded</div>
+                  <p className="text-xs text-slate-400 max-w-sm mx-auto">
+                    The patient did not submit any diagnostic slips or lab test reports with this intake.
+                  </p>
                 </div>
-                <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 pt-2">
-                  <div className="bg-white p-2.5 rounded-lg border border-slate-200 text-center">
-                    <span className="text-[10px] text-slate-400 font-medium">Hemoglobin</span>
-                    <div className="text-sm font-bold text-slate-800 mt-0.5">13.8 g/dL</div>
-                    <span className="text-[9px] text-emerald-600 font-semibold">Normal</span>
+              ) : (
+                <div className="p-4 border border-slate-200 rounded-xl bg-slate-50 text-xs space-y-3">
+                  <div className="flex items-center justify-between">
+                    <span className="font-bold text-slate-800">
+                      {caseData.reports[0] || "Diagnostic Report"}
+                    </span>
+                    <span className="text-emerald-700 font-bold bg-emerald-50 px-2 py-0.5 rounded border border-emerald-200">
+                      Uploaded File
+                    </span>
                   </div>
-                  <div className="bg-white p-2.5 rounded-lg border border-amber-300 text-center bg-amber-50/40">
-                    <span className="text-[10px] text-amber-800 font-medium">WBC Count</span>
-                    <div className="text-sm font-bold text-amber-900 mt-0.5">11,500 /µL</div>
-                    <span className="text-[9px] text-amber-700 font-semibold">Mildly Elevated</span>
-                  </div>
-                  <div className="bg-white p-2.5 rounded-lg border border-slate-200 text-center">
-                    <span className="text-[10px] text-slate-400 font-medium">Platelets</span>
-                    <div className="text-sm font-bold text-slate-800 mt-0.5">2.2 Lakh/µL</div>
-                    <span className="text-[9px] text-emerald-600 font-semibold">Normal</span>
-                  </div>
-                  <div className="bg-white p-2.5 rounded-lg border border-slate-200 text-center">
-                    <span className="text-[10px] text-slate-400 font-medium">ESR</span>
-                    <div className="text-sm font-bold text-slate-800 mt-0.5">24 mm/hr</div>
-                    <span className="text-[9px] text-slate-500 font-semibold">Borderline</span>
-                  </div>
+                  {caseData.aiReportAnalysis && caseData.aiReportAnalysis.length > 0 ? (
+                    <div className="space-y-1.5 pt-2">
+                      <div className="text-[11px] font-bold text-slate-600">Extracted Findings &amp; Summary:</div>
+                      {caseData.aiReportAnalysis.map((item, i) => (
+                        <div key={i} className="text-xs text-slate-700 bg-white p-2.5 rounded-lg border border-slate-200">
+                          {item}
+                        </div>
+                      ))}
+                    </div>
+                  ) : (
+                    <p className="text-xs text-slate-500 italic">No automated parameters extracted for this report.</p>
+                  )}
+                  {caseData.uploadedReportUrl && (
+                    <div className="pt-2">
+                      <a
+                        href={caseData.uploadedReportUrl}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        className="inline-flex items-center gap-1.5 px-3 py-1.5 bg-teal-800 hover:bg-teal-900 text-white font-bold rounded-lg text-xs"
+                      >
+                        <FileText className="w-3.5 h-3.5" />
+                        <span>Open Original Document</span>
+                      </a>
+                    </div>
+                  )}
                 </div>
-              </div>
+              )}
             </div>
           )}
 
@@ -902,20 +1074,38 @@ export function CaseReviewWorkspace({
                       <span>Choose Doctor</span>
                     </label>
                     <span className="text-[10px] font-semibold text-emerald-800 bg-emerald-100 px-2 py-0.5 rounded-md">
-                      PHC Medical Roster
+                      {loadingDoctors
+                        ? "Checking Facility Roster..."
+                        : `${caseData.facility ? caseData.facility.split(" ")[0] : "Facility"} Roster (${facilityDoctors.length})`}
                     </span>
                   </div>
 
                   <select
                     value={assignedDoctor}
-                    onChange={(e) => setAssignedDoctor(e.target.value)}
+                    onChange={(e) => {
+                      const val = e.target.value;
+                      setAssignedDoctor(val);
+                      if (val === "Other") {
+                        setAssignedDoctorId(undefined);
+                      } else {
+                        const matched = facilityDoctors.find((d) => d.name === val || d.id === val || d.profileId === val);
+                        setAssignedDoctorId(matched?.profileId || matched?.id);
+                      }
+                    }}
+                    disabled={loadingDoctors}
                     className="w-full p-2.5 bg-white border border-emerald-300 rounded-lg text-xs font-semibold text-slate-800 focus:outline-hidden focus:ring-2 focus:ring-emerald-500 shadow-2xs cursor-pointer"
                   >
-                    {DOCTOR_OPTIONS.map((doc) => (
-                      <option key={doc.name} value={doc.name}>
-                        {doc.name} — {doc.role} ({doc.room})
+                    {facilityDoctors.length > 0 ? (
+                      facilityDoctors.map((doc) => (
+                        <option key={doc.id} value={doc.name}>
+                          {doc.name} — {doc.role} ({doc.room || doc.department})
+                        </option>
+                      ))
+                    ) : (
+                      <option value="" disabled>
+                        No doctors currently registered at {caseData.facility || "this facility"}
                       </option>
-                    ))}
+                    )}
                     <option value="Other">Other Doctor (Enter Custom Name)...</option>
                   </select>
 
@@ -1092,32 +1282,37 @@ export function CaseReviewWorkspace({
                       <span>Choose Referral Facility</span>
                     </label>
                     <span className="text-[10px] font-semibold text-amber-800 bg-amber-100 px-2 py-0.5 rounded-md">
-                      Secondary / Tertiary Care
+                      Database Verified Facilities
                     </span>
                   </div>
 
                   <select
-                    value={referralFacility}
-                    onChange={(e) => setReferralFacility(e.target.value)}
-                    className="w-full p-2.5 bg-white border border-amber-300 rounded-lg text-xs font-semibold text-slate-800 focus:outline-hidden focus:ring-2 focus:ring-amber-500 shadow-2xs cursor-pointer"
+                    value={referralFacilityId || ""}
+                    onChange={(e) => {
+                      const val = e.target.value;
+                      setReferralFacilityId(val);
+                      const f = availableFacilities.find((fac) => fac.id === val);
+                      if (f) setReferralFacility(f.name);
+                    }}
+                    disabled={loadingFacilities}
+                    className="w-full p-2.5 bg-white border border-amber-300 rounded-lg text-xs font-semibold text-slate-800 focus:outline-hidden focus:ring-2 focus:ring-amber-500 shadow-2xs cursor-pointer disabled:bg-slate-50 disabled:cursor-not-allowed"
                   >
-                    {FACILITY_OPTIONS.map((fac) => (
-                      <option key={fac.name} value={fac.name}>
-                        {fac.name} — {fac.type} ({fac.distance})
-                      </option>
-                    ))}
-                    <option value="Other">Other Facility (Enter Custom Name)...</option>
+                    {loadingFacilities ? (
+                      <option value="">Loading facilities from database...</option>
+                    ) : availableFacilities.length > 0 ? (
+                      availableFacilities.map((fac) => {
+                        const locParts = [fac.block, fac.district, fac.state].filter(Boolean);
+                        const locText = locParts.length ? ` — ${locParts.join(", ")}` : "";
+                        return (
+                          <option key={fac.id} value={fac.id}>
+                            {fac.name}{locText}
+                          </option>
+                        );
+                      })
+                    ) : (
+                      <option value="" disabled>No registered facilities found in database</option>
+                    )}
                   </select>
-
-                  {referralFacility === "Other" && (
-                    <input
-                      type="text"
-                      value={customFacility}
-                      onChange={(e) => setCustomFacility(e.target.value)}
-                      placeholder="Enter hospital / facility name and district..."
-                      className="w-full p-2 bg-white border border-amber-300 rounded-lg text-xs font-medium text-slate-800 focus:outline-hidden focus:ring-2 focus:ring-amber-500 shadow-2xs"
-                    />
-                  )}
                 </div>
 
                 <div className="space-y-1">
@@ -1134,7 +1329,7 @@ export function CaseReviewWorkspace({
                 </div>
 
                 <p className="text-[10px] text-amber-800">
-                  Case will be transferred and escalated to {referralFacility === "Other" ? (customFacility || "the specified facility") : referralFacility} with patient telemetry.
+                  Case will be transferred and escalated to {referralFacility || "selected facility"} with patient telemetry.
                 </p>
               </div>
             )}
@@ -1166,28 +1361,48 @@ export function CaseReviewWorkspace({
             <div className="flex items-center justify-between border-b border-slate-100 pb-3">
               <div className="flex items-center gap-2 font-bold text-slate-900 text-sm">
                 <FileText className="w-4 h-4 text-teal-700" />
-                <span>blood_test_report.jpeg</span>
+                <span>{caseData.reports[0] || "Medical Document"}</span>
               </div>
               <button
                 onClick={() => setReportModalOpen(false)}
-                className="p-1 rounded-lg text-slate-400 hover:text-slate-800"
+                className="p-1 rounded-lg text-slate-400 hover:text-slate-800 cursor-pointer"
               >
                 <X className="w-4 h-4" />
               </button>
             </div>
-            <div className="p-8 bg-slate-100 rounded-xl text-center border border-slate-200 text-xs text-slate-500">
-              <FileText className="w-12 h-12 text-teal-700 mx-auto mb-2 opacity-80" />
-              <div className="font-bold text-slate-800">
-                Complete Blood Count (CBC) Laboratory Slip
+            <div className="p-6 bg-slate-50 rounded-xl border border-slate-200 text-xs text-slate-600 space-y-3">
+              <FileText className="w-10 h-10 text-teal-700 mx-auto opacity-80" />
+              <div className="text-center">
+                <div className="font-bold text-slate-800 text-sm">
+                  {caseData.reports[0] || "Diagnostic Report"}
+                </div>
+                <div className="text-[11px] text-slate-500 mt-1">
+                  Attached to case {caseData.id} &bull; {caseData.submittedTime ? `Submitted ${caseData.submittedTime}` : "Uploaded by patient"}
+                </div>
               </div>
-              <div className="text-[11px] mt-1">
-                Specimen ID: LAB-9021 &bull; Collected: Nayagarh Diagnostic Center
-              </div>
+              {caseData.aiReportAnalysis && caseData.aiReportAnalysis.length > 0 && (
+                <div className="mt-3 p-3 bg-white rounded-lg border border-slate-200 text-left space-y-1">
+                  <div className="font-bold text-slate-700 text-[11px]">Analysis &amp; Findings:</div>
+                  {caseData.aiReportAnalysis.map((item, idx) => (
+                    <div key={idx} className="text-[11px] text-slate-600">&bull; {item}</div>
+                  ))}
+                </div>
+              )}
             </div>
-            <div className="text-right">
+            <div className="flex items-center justify-between pt-1">
+              {caseData.uploadedReportUrl ? (
+                <a
+                  href={caseData.uploadedReportUrl}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="px-4 py-2 bg-teal-800 hover:bg-teal-900 text-white text-xs font-bold rounded-xl"
+                >
+                  Download / View File
+                </a>
+              ) : <div />}
               <button
                 onClick={() => setReportModalOpen(false)}
-                className="px-4 py-2 bg-slate-800 text-white text-xs font-bold rounded-xl"
+                className="px-4 py-2 bg-slate-800 text-white text-xs font-bold rounded-xl cursor-pointer"
               >
                 Close Viewer
               </button>
@@ -1207,23 +1422,29 @@ export function CaseReviewWorkspace({
               </div>
               <button
                 onClick={() => setMissingModalOpen(false)}
-                className="p-1 rounded-lg text-slate-400 hover:text-slate-800"
+                className="p-1 rounded-lg text-slate-400 hover:text-slate-800 cursor-pointer"
               >
                 <X className="w-4 h-4" />
               </button>
             </div>
             <div className="space-y-2 text-xs text-slate-700">
-              <p>The following clinical data points were not captured:</p>
-              <ul className="list-disc pl-5 space-y-1">
-                <li><strong>Temperature Value:</strong> Oral or axillary thermometry needed.</li>
-                <li><strong>Travel History:</strong> Recent interstate or forest-area transit.</li>
-                <li><strong>Chronic Conditions:</strong> Diabetes, Hypertension, or Kidney status.</li>
+              <p>The following clinical data points were not captured during intake:</p>
+              <ul className="list-disc pl-5 space-y-1.5 text-slate-800">
+                {caseData.missingDetails && caseData.missingDetails.length > 0 ? (
+                  caseData.missingDetails.map((item, idx) => (
+                    <li key={idx} className="font-medium">
+                      {item}
+                    </li>
+                  ))
+                ) : (
+                  <li className="italic text-slate-500">No missing details identified</li>
+                )}
               </ul>
             </div>
             <div className="text-right pt-2">
               <button
                 onClick={() => setMissingModalOpen(false)}
-                className="px-4 py-2 bg-teal-800 text-white text-xs font-bold rounded-xl"
+                className="px-4 py-2 bg-teal-800 text-white text-xs font-bold rounded-xl cursor-pointer"
               >
                 Understood
               </button>
