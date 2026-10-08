@@ -8,9 +8,10 @@ import { DoctorReviewQueueView, isForwardedByNurseOrDoctor } from "@/components/
 import { DoctorEmergencyCasesView } from "@/components/doctor/DoctorEmergencyCasesView";
 import { DoctorReviewHistoryView, ReviewedCaseRecord } from "@/components/doctor/DoctorReviewHistoryView";
 import { DoctorProfileView } from "@/components/doctor/DoctorProfileView";
-import { FacilityAvailabilityView } from "@/components/nurse/FacilityAvailabilityView";
 import { CaseDetails } from "@/components/nurse/CaseReviewWorkspace";
+import { FacilityAvailabilityView } from "@/components/nurse/FacilityAvailabilityView";
 import { fetchLiveNurseQueue, submitLiveNurseAction } from "@/lib/nurse-api";
+import { supabase, isSupabaseConfigured } from "@/lib/supabase";
 import { useAuth } from "@/lib/auth-context";
 import { CheckCircle2, RefreshCw } from "lucide-react";
 
@@ -205,6 +206,33 @@ function DoctorPortalContent() {
 
   useEffect(() => {
     loadLiveCases();
+
+    // 1. Live Supabase Realtime subscription on triage_tickets
+    let channel: any = null;
+    if (isSupabaseConfigured && supabase) {
+      channel = supabase
+        .channel("doctor-portal-live-sync")
+        .on(
+          "postgres_changes",
+          { event: "*", schema: "public", table: "triage_tickets" },
+          () => {
+            loadLiveCases();
+          }
+        )
+        .subscribe();
+    }
+
+    // 2. Auto-polling interval every 6 seconds as seamless fallback
+    const pollInterval = setInterval(() => {
+      loadLiveCases();
+    }, 6000);
+
+    return () => {
+      if (channel && supabase) {
+        supabase.removeChannel(channel);
+      }
+      clearInterval(pollInterval);
+    };
   }, [loadLiveCases]);
 
   // Red Emergency count (Immediate / Red)

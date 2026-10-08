@@ -16,12 +16,21 @@ export function Header() {
   const pathname = usePathname();
   const { user, role, language, setLanguage } = useAuth();
   const [langDropdownOpen, setLangDropdownOpen] = useState(false);
+  const [langSearch, setLangSearch] = useState("");
+
+  const filteredLanguages = INDIAN_LANGUAGES.filter(
+    (l) =>
+      l.name.toLowerCase().includes(langSearch.toLowerCase()) ||
+      l.nativeName.toLowerCase().includes(langSearch.toLowerCase()) ||
+      l.code.toLowerCase().includes(langSearch.toLowerCase())
+  );
 
   const isLandingPage = pathname === "/";
   const isAuthOrRegister =
     pathname === "/login" ||
     pathname.startsWith("/admin") ||
     pathname.startsWith("/register") ||
+    pathname.startsWith("/citizen") ||
     pathname.startsWith("/patient") ||
     pathname.startsWith("/nurse") ||
     pathname.startsWith("/doctor") ||
@@ -34,11 +43,11 @@ export function Header() {
 
   const currentPortalLinks: Record<UserRole, Array<{ href: string; label: string }>> = {
     patient: [
-      { href: "/patient", label: "Dashboard" },
-      { href: "/patient/symptoms", label: "Report Symptoms" },
-      { href: "/patient/upload", label: "Upload Reports" },
-      { href: "/patient/timeline", label: "Health Timeline" },
-      { href: "/patient/profile", label: "My Profile" },
+      { href: "/citizen", label: "Dashboard" },
+      { href: "/citizen/symptoms", label: "Report Symptoms" },
+      { href: "/citizen/upload", label: "Upload Reports" },
+      { href: "/citizen/timeline", label: "Health Timeline" },
+      { href: "/citizen/profile", label: "My Profile" },
     ],
     nurse: [
       { href: "/nurse", label: "Triage Queue" },
@@ -99,7 +108,7 @@ export function Header() {
             {isLandingPage ? (
               <>
                 <Link href="/" className="text-teal-800 hover:text-teal-900">Platform</Link>
-                <Link href="/patient" className="hover:text-teal-800">For Patients</Link>
+                <Link href="/citizen" className="hover:text-teal-800">For Citizens</Link>
                 <Link href="/nurse" className="hover:text-teal-800">For Health Workers</Link>
                 <Link href="/doctor" className="hover:text-teal-800">For Doctors</Link>
                 <Link href="/doctor/audit" className="hover:text-teal-800">Safety &amp; Privacy</Link>
@@ -135,20 +144,32 @@ export function Header() {
 
               {langDropdownOpen && (
                 <div 
-                  className="absolute right-0 mt-1 w-52 max-h-72 overflow-y-auto bg-white rounded-xl shadow-xl border border-slate-200 py-1.5 z-50 text-xs divide-y divide-slate-100"
+                  className="absolute right-0 mt-1 w-60 max-h-80 overflow-hidden flex flex-col bg-white rounded-xl shadow-xl border border-slate-200 z-50 text-xs"
                   onMouseLeave={() => setLangDropdownOpen(false)}
                 >
-                  <div className="px-3 py-1 text-[10px] font-bold uppercase tracking-wider text-slate-400">
-                    Indian Regional Languages
+                  <div className="p-2 border-b border-slate-100 bg-slate-50/60">
+                    <div className="flex items-center justify-between text-[10px] font-bold uppercase tracking-wider text-teal-800 mb-1.5">
+                      <span>23 Languages</span>
+                      <span className="text-[9px] bg-teal-100 text-teal-900 px-1.5 py-0.5 rounded font-mono">Sarvam AI</span>
+                    </div>
+                    <input
+                      type="text"
+                      placeholder="Search language..."
+                      value={langSearch}
+                      onChange={(e) => setLangSearch(e.target.value)}
+                      onClick={(e) => e.stopPropagation()}
+                      className="w-full px-2 py-1 text-xs bg-white border border-slate-200 rounded-lg text-slate-800 placeholder-slate-400 focus:outline-teal-700 focus:border-teal-700"
+                    />
                   </div>
-                  <div className="py-1">
-                    {INDIAN_LANGUAGES.map((l) => (
+                  <div className="overflow-y-auto max-h-56 divide-y divide-slate-100 py-1">
+                    {filteredLanguages.map((l) => (
                       <button
                         key={l.code}
                         type="button"
                         onClick={() => {
                           setLanguage(l.code);
                           setLangDropdownOpen(false);
+                          setLangSearch("");
                         }}
                         className={`w-full text-left px-3 py-1.5 flex items-center justify-between hover:bg-teal-50 transition-colors ${
                           language === l.code ? "font-bold text-teal-800 bg-teal-50/70" : "text-slate-700"
@@ -158,6 +179,11 @@ export function Header() {
                         <span className="text-[11px] text-slate-400 font-normal">{l.name}</span>
                       </button>
                     ))}
+                    {filteredLanguages.length === 0 && (
+                      <div className="px-3 py-3 text-center text-xs text-slate-400">
+                        No language found
+                      </div>
+                    )}
                   </div>
                 </div>
               )}

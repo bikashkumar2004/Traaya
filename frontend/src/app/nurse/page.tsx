@@ -15,6 +15,7 @@ import {
   submitLiveNurseAction,
   submitLiveNurseIntake,
 } from "@/lib/nurse-api";
+import { supabase, isSupabaseConfigured } from "@/lib/supabase";
 import { Database, RefreshCw, CheckCircle2 } from "lucide-react";
 import { useAuth } from "@/lib/auth-context";
 
@@ -66,11 +67,33 @@ function NursePortalContent() {
 
   useEffect(() => {
     loadData();
-    // Auto-refresh every 10 seconds so new patient submissions appear for all nurses of this facility
+
+    // 1. Live Supabase Realtime subscription on triage_tickets
+    let channel: any = null;
+    if (isSupabaseConfigured && supabase) {
+      channel = supabase
+        .channel("nurse-portal-live-sync")
+        .on(
+          "postgres_changes",
+          { event: "*", schema: "public", table: "triage_tickets" },
+          () => {
+            loadData();
+          }
+        )
+        .subscribe();
+    }
+
+    // 2. Auto-refresh polling every 6 seconds as fallback
     const interval = setInterval(() => {
       loadData();
-    }, 10000);
-    return () => clearInterval(interval);
+    }, 6000);
+
+    return () => {
+      if (channel && supabase) {
+        supabase.removeChannel(channel);
+      }
+      clearInterval(interval);
+    };
   }, [loadData]);
 
   // Handle case review action submission (Persists to database)

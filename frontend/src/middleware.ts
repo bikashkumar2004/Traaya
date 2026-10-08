@@ -3,6 +3,7 @@ import type { NextRequest } from "next/server";
 
 // Role-to-route authorization mapping
 const ROLE_PORTAL_MAP: Record<string, string[]> = {
+  "/citizen": ["patient"],
   "/patient": ["patient"],
   "/nurse": ["nurse", "admin"],
   "/doctor": ["doctor", "admin"],
@@ -14,7 +15,7 @@ const ROLE_PORTAL_MAP: Record<string, string[]> = {
 };
 
 const ROLE_DEFAULT_PORTAL: Record<string, string> = {
-  patient: "/patient",
+  patient: "/citizen",
   nurse: "/nurse",
   doctor: "/doctor",
   facility: "/medical",
@@ -43,6 +44,13 @@ export function middleware(request: NextRequest) {
   if (pathname === "/facility" || pathname.startsWith("/facility/")) {
     const medicalUrl = new URL("/medical", request.url);
     return NextResponse.redirect(medicalUrl);
+  }
+
+  // 1.2 Redirect any /patient visits directly to /citizen
+  if (pathname === "/patient" || pathname.startsWith("/patient/")) {
+    const citizenPath = pathname.replace(/^\/patient/, "/citizen");
+    const citizenUrl = new URL(citizenPath, request.url);
+    return NextResponse.redirect(citizenUrl);
   }
 
   // 2. Read auth cookies: check HttpOnly refresh_token and triage_role
@@ -91,6 +99,8 @@ export function middleware(request: NextRequest) {
 
 export const config = {
   matcher: [
+    "/citizen",
+    "/citizen/:path*",
     "/patient",
     "/patient/:path*",
     "/nurse",

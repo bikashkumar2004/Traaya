@@ -5,6 +5,7 @@ import { AuthProvider } from "@/lib/auth-context";
 import { Header } from "@/components/common/Header";
 import { DisclaimerBanner } from "@/components/common/DisclaimerBanner";
 import { MainContainer } from "@/components/common/MainContainer";
+import { SarvamWebsiteTranslator } from "@/components/common/SarvamWebsiteTranslator";
 
 const plusJakartaSans = Plus_Jakarta_Sans({
   variable: "--font-jakarta",
@@ -51,6 +52,7 @@ export default async function RootLayout({
             {children}
           </MainContainer>
           <DisclaimerBanner />
+          <SarvamWebsiteTranslator />
         </AuthProvider>
       </body>
     </html>

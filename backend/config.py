@@ -19,11 +19,16 @@ CORS_ORIGINS = [
     "http://localhost:8000",
 ]
 
-# Hugging Face User Access Token Configuration
-HF_TOKEN = os.getenv("HF_TOKEN")
+# Model & Hugging Face Configuration
+HF_TOKEN = os.getenv("HF_TOKEN", "")
 
-HF_ROUTER_BASE = "https://router.huggingface.co/v1"
-QWEN_TEXT_MODEL = "Qwen/Qwen2.5-72B-Instruct"
-QWEN_VL_MODEL = "Qwen/Qwen2.5-VL-72B-Instruct"
+# Custom Fine-Tuned Model URLs (from Kaggle ngrok tunnels, HF endpoints, or local vLLM)
+TRIAGE_MODEL_URL = os.getenv("TRIAGE_MODEL_URL", os.getenv("HF_ROUTER_BASE", "https://router.huggingface.co/v1"))
+OCR_MODEL_URL = os.getenv("OCR_MODEL_URL", os.getenv("HF_ROUTER_BASE", "https://router.huggingface.co/v1"))
+
+# Legacy fallbacks
+HF_ROUTER_BASE = os.getenv("HF_ROUTER_BASE", "https://router.huggingface.co/v1")
+CUSTOM_TRIAGE_MODEL = os.getenv("CUSTOM_TRIAGE_MODEL", "clinical-triage-doctor")
+CUSTOM_OCR_MODEL = os.getenv("CUSTOM_OCR_MODEL", "clinical-ocr-scanner")
 
 

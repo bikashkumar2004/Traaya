@@ -3,7 +3,7 @@
 import React, { useState } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
-import { useAuth, INDIAN_LANGUAGES } from "@/lib/auth-context";
+import { useAuth } from "@/lib/auth-context";
 import {
   LayoutDashboard,
   ClipboardCheck,
@@ -16,7 +16,6 @@ import {
   Activity,
   Menu,
   X,
-  Globe,
   ChevronDown,
   ShieldCheck,
   LogOut,
@@ -54,13 +53,9 @@ export function DoctorShell({
   historyCount = 0,
 }: DoctorShellProps) {
   const router = useRouter();
-  const { user, language, setLanguage, signOut } = useAuth();
+  const { user, signOut } = useAuth();
   const [mobileSidebarOpen, setMobileSidebarOpen] = useState(false);
   const [notificationsOpen, setNotificationsOpen] = useState(false);
-  const [langDropdownOpen, setLangDropdownOpen] = useState(false);
-
-  const currentLangObj =
-    INDIAN_LANGUAGES.find((l) => l.code === language) || INDIAN_LANGUAGES[0];
 
   const navItems: Array<{
     id: DoctorNavTab;
@@ -269,52 +264,6 @@ export function DoctorShell({
 
           {/* Right Actions: Regional Language Dropdown, Notification Bell, Profile & Logout */}
           <div className="flex items-center gap-2.5 sm:gap-3 shrink-0">
-            {/* Indian Regional Language Dropdown */}
-            <div className="relative">
-              <button
-                type="button"
-                onClick={() => setLangDropdownOpen(!langDropdownOpen)}
-                className="flex items-center gap-1.5 text-xs font-semibold text-slate-700 hover:text-slate-900 px-2.5 py-1.5 rounded-lg border border-slate-200 hover:bg-slate-50 transition-colors cursor-pointer"
-              >
-                <Globe className="w-3.5 h-3.5 text-teal-700" />
-                <span>{currentLangObj.nativeName}</span>
-                <ChevronDown className="w-3 h-3 text-slate-400" />
-              </button>
-
-              {langDropdownOpen && (
-                <div
-                  className="absolute right-0 mt-1 w-52 max-h-72 overflow-y-auto bg-white rounded-xl shadow-xl border border-slate-200 py-1.5 z-50 text-xs divide-y divide-slate-100"
-                  onMouseLeave={() => setLangDropdownOpen(false)}
-                >
-                  <div className="px-3 py-1 text-[10px] font-bold uppercase tracking-wider text-slate-400">
-                    Indian Regional Languages
-                  </div>
-                  <div className="py-1">
-                    {INDIAN_LANGUAGES.map((l) => (
-                      <button
-                        key={l.code}
-                        type="button"
-                        onClick={() => {
-                          setLanguage(l.code);
-                          setLangDropdownOpen(false);
-                        }}
-                        className={`w-full text-left px-3 py-1.5 flex items-center justify-between hover:bg-teal-50 transition-colors cursor-pointer ${
-                          language === l.code
-                            ? "font-bold text-teal-800 bg-teal-50/70"
-                            : "text-slate-700"
-                        }`}
-                      >
-                        <span className="font-medium">{l.nativeName}</span>
-                        <span className="text-[11px] text-slate-400 font-normal">
-                          {l.name}
-                        </span>
-                      </button>
-                    ))}
-                  </div>
-                </div>
-              )}
-            </div>
-
             {/* Notifications Button with Red Badge Counter */}
             <div className="relative">
               <button

@@ -10,6 +10,7 @@ export function DisclaimerBanner() {
     pathname === "/login" ||
     pathname.startsWith("/admin") ||
     pathname.startsWith("/register") ||
+    pathname.startsWith("/citizen") ||
     pathname.startsWith("/patient") ||
     pathname.startsWith("/nurse") ||
     pathname.startsWith("/doctor") ||

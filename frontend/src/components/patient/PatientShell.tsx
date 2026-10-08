@@ -36,9 +36,17 @@ export function PatientShell({ children }: PatientShellProps) {
   const router = useRouter();
   const { user, language, setLanguage, signOut } = useAuth();
   const [langDropdownOpen, setLangDropdownOpen] = useState(false);
+  const [langSearch, setLangSearch] = useState("");
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
   const [emergencyModalOpen, setEmergencyModalOpen] = useState(false);
   const [ashaModalOpen, setAshaModalOpen] = useState(false);
+
+  const filteredLanguages = INDIAN_LANGUAGES.filter(
+    (l) =>
+      l.name.toLowerCase().includes(langSearch.toLowerCase()) ||
+      l.nativeName.toLowerCase().includes(langSearch.toLowerCase()) ||
+      l.code.toLowerCase().includes(langSearch.toLowerCase())
+  );
 
   const actualFullName = user?.fullName || "";
   const actualPatientId = user?.patientUhid || user?.userId || "";
@@ -54,34 +62,34 @@ export function PatientShell({ children }: PatientShellProps) {
 
   const navItems = [
     {
-      href: "/patient",
-      label: "Home / Dashboard",
+      href: "/citizen",
+      label: "Dashboard",
       icon: LayoutDashboard,
       exact: true
     },
     {
-      href: "/patient/symptoms",
+      href: "/citizen/symptoms",
       label: "Report Symptoms",
       icon: ClipboardList
     },
     {
-      href: "/patient/timeline",
+      href: "/citizen/timeline",
       label: "My Timeline & Visits",
       icon: Calendar
     },
     {
-      href: "/patient/upload",
-      label: "Upload Reports & Rx",
+      href: "/citizen/upload",
+      label: "Upload Reports",
       icon: UploadCloud
     },
     {
-      href: "/patient/reminders",
+      href: "/citizen/reminders",
       label: "Reminders & Follow-ups",
       icon: Bell
     },
     {
-      href: "/patient/profile",
-      label: "Profile & Dependents",
+      href: "/citizen/profile",
+      label: "My Profile",
       icon: Users
     }
   ];
@@ -105,7 +113,7 @@ export function PatientShell({ children }: PatientShellProps) {
         <div className="flex flex-col h-full overflow-hidden">
           {/* Top Brand with Landing Page Logo */}
           <div className="p-4 border-b border-blue-200/60 flex items-center justify-between shrink-0">
-            <Link href="/patient" className="flex items-center gap-2.5 group">
+            <Link href="/citizen" className="flex items-center gap-2.5 group">
               <div className="w-8 h-8 rounded-xl bg-teal-700 flex items-center justify-center text-white shadow-xs group-hover:scale-105 transition-transform shrink-0">
                 <Activity className="w-4 h-4" />
               </div>
@@ -230,20 +238,32 @@ export function PatientShell({ children }: PatientShellProps) {
 
               {langDropdownOpen && (
                 <div
-                  className="absolute right-0 mt-1 w-52 max-h-72 overflow-y-auto bg-white rounded-xl shadow-xl border border-slate-200 py-1.5 z-50 text-xs divide-y divide-slate-100"
+                  className="absolute right-0 mt-1 w-60 max-h-80 overflow-hidden flex flex-col bg-white rounded-xl shadow-xl border border-slate-200 z-50 text-xs"
                   onMouseLeave={() => setLangDropdownOpen(false)}
                 >
-                  <div className="px-3 py-1 text-[10px] font-bold uppercase tracking-wider text-slate-400">
-                    Indian Regional Languages
+                  <div className="p-2 border-b border-slate-100 bg-slate-50/60">
+                    <div className="flex items-center justify-between text-[10px] font-bold uppercase tracking-wider text-teal-800 mb-1.5">
+                      <span>23 Languages</span>
+                      <span className="text-[9px] bg-teal-100 text-teal-900 px-1.5 py-0.5 rounded font-mono">Sarvam AI</span>
+                    </div>
+                    <input
+                      type="text"
+                      placeholder="Search language..."
+                      value={langSearch}
+                      onChange={(e) => setLangSearch(e.target.value)}
+                      onClick={(e) => e.stopPropagation()}
+                      className="w-full px-2 py-1 text-xs bg-white border border-slate-200 rounded-lg text-slate-800 placeholder-slate-400 focus:outline-teal-700 focus:border-teal-700"
+                    />
                   </div>
-                  <div className="py-1">
-                    {INDIAN_LANGUAGES.map((l) => (
+                  <div className="overflow-y-auto max-h-56 divide-y divide-slate-100 py-1">
+                    {filteredLanguages.map((l) => (
                       <button
                         key={l.code}
                         type="button"
                         onClick={() => {
                           setLanguage(l.code);
                           setLangDropdownOpen(false);
+                          setLangSearch("");
                         }}
                         className={`w-full text-left px-3 py-1.5 flex items-center justify-between hover:bg-teal-50 transition-colors cursor-pointer ${
                           language === l.code ? "font-bold text-teal-800 bg-teal-50/70" : "text-slate-700"
@@ -253,6 +273,11 @@ export function PatientShell({ children }: PatientShellProps) {
                         <span className="text-[11px] text-slate-400 font-normal">{l.name}</span>
                       </button>
                     ))}
+                    {filteredLanguages.length === 0 && (
+                      <div className="px-3 py-3 text-center text-xs text-slate-400">
+                        No language found
+                      </div>
+                    )}
                   </div>
                 </div>
               )}
@@ -270,7 +295,7 @@ export function PatientShell({ children }: PatientShellProps) {
 
             {/* Profile Icon with actual registered full name */}
             <Link
-              href="/patient/profile"
+              href="/citizen/profile"
               className="flex items-center gap-2.5 p-1 pl-1.5 pr-3 rounded-xl hover:bg-slate-100 transition-colors border border-slate-200/80 bg-slate-50/60 group"
               title="View Profile & Settings"
             >
