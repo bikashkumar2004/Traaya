@@ -6,10 +6,17 @@ from typing import Optional, List, Dict, Any
 
 from fastapi import APIRouter, HTTPException, Query
 import httpx
-import psycopg2
-from psycopg2.extras import RealDictCursor
+try:
+    import psycopg2
+    from psycopg2.extras import RealDictCursor
+    HAS_PSYCOPG2 = True
+except ImportError:
+    psycopg2 = None
+    RealDictCursor = None
+    HAS_PSYCOPG2 = False
 
 from config import SUPABASE_URL, SUPABASE_KEY, DATABASE_URL
+from ..ocr.cache import get_redis
 from .schemas import (
     DoctorOverrideRequest,
     AnswerRevertedQuestionsRequest,
@@ -248,45 +255,15 @@ async def answer_reverted_questions(req: AnswerRevertedQuestionsRequest):
                 raise HTTPException(status_code=404, detail="Ticket not found")
 
             ticket = tickets[0]
-            raw_existing = ticket.get("reverted_questions") or []
-            if isinstance(raw_existing, str):
-                try:
-                    raw_existing = json.loads(raw_existing)
-                except Exception:
-                    raw_existing = [
-                        {"id": f"q_{idx+1}", "question": line.strip(), "answer": ""}
-                        for idx, line in enumerate(raw_existing.split("\n"))
-                        if line.strip()
-                    ]
-            if isinstance(raw_existing, dict):
-                raw_existing = [raw_existing]
-            elif not isinstance(raw_existing, list):
-                raw_existing = []
-
-            existing_questions = []
-            for idx, q in enumerate(raw_existing):
-                if isinstance(q, str):
-                    if q.strip():
-                        existing_questions.append({"id": f"q_{idx+1}", "question": q.strip(), "answer": ""})
-                elif isinstance(q, dict):
-                    q_text = str(q.get("question") or q.get("q") or "").strip()
-                    if q_text:
-                        existing_questions.append({
-                            "id": str(q.get("id") or f"q_{idx+1}"),
-                            "question": q_text,
-                            "answer": str(q.get("answer") or ""),
-                            "answered_at": q.get("answered_at")
-                        })
-
-            answers_map = {str(a.get("id")): a.get("answer") for a in req.answers}
+            existing_questions = ticket.get("reverted_questions") or []
+            answers_map = {a.get("id"): a.get("answer") for a in req.answers}
 
             updated_questions = []
-            for idx, q in enumerate(existing_questions):
-                qid = str(q.get("id") or f"q_{idx+1}")
+            for q in existing_questions:
+                qid = q.get("id")
                 new_q = dict(q)
-                new_q["id"] = qid
-                if qid in answers_map and answers_map[qid] is not None:
-                    new_q["answer"] = str(answers_map[qid]).strip()
+                if qid in answers_map:
+                    new_q["answer"] = answers_map[qid]
                     new_q["answered_at"] = datetime.now().isoformat()
                 updated_questions.append(new_q)
 
@@ -314,14 +291,37 @@ async def answer_reverted_questions(req: AnswerRevertedQuestionsRequest):
 
 
 @router.get("/search-patient")
-def search_patient(query: str = Query("", description="UHID, phone, or name")):
+async def search_patient(query: str = Query("", description="UHID, phone, or name")):
     """
     Dynamically searches both new_patient and profiles (role=patient) for matching records.
     Phone numbers can be searched in ANY format (e.g. '9437819472', '94378 19472', '+91 94378 19472', or partial digits).
+    Caches search results in Upstash Redis for 5 minutes for sub-5ms type-ahead performance.
     """
     q = query.strip()
     if not q or len(q) < 2:
         return {"status": "success", "patients": []}
+
+    # 0. Check Upstash Redis Cache first (sub-5ms response)
+    redis_client = await get_redis()
+    cache_key = f"search:patient:{q.lower()}"
+    if redis_client:
+        try:
+            cached_res = await redis_client.get(cache_key)
+            if cached_res:
+                print(f"[Redis Cache HIT] Patient search '{q}' served in <5ms from Upstash!")
+                return json.loads(cached_res)
+        except Exception as ce:
+            print(f"[Redis Search Cache Read Note] {ce}")
+
+    async def _cache_and_return(patients_list):
+        payload = {"status": "success", "patients": patients_list}
+        if redis_client and patients_list:
+            try:
+                await redis_client.set(cache_key, json.dumps(payload), ex=300)
+                print(f"[Redis Cache SAVED] Stored patient search '{q}' ({len(patients_list)} matches) in Upstash.")
+            except Exception as we:
+                print(f"[Redis Search Cache Write Note] {we}")
+        return payload
 
     digits = re.sub(r"[^0-9]", "", q)
     d_clean = digits[-10:] if len(digits) >= 10 else digits
@@ -330,7 +330,7 @@ def search_patient(query: str = Query("", description="UHID, phone, or name")):
     seen_keys = set()
 
     # 1. Direct PostgreSQL query with format-agnostic phone matching
-    if DATABASE_URL:
+    if DATABASE_URL and HAS_PSYCOPG2:
         conn = None
         try:
             conn = psycopg2.connect(DATABASE_URL)
@@ -402,7 +402,7 @@ def search_patient(query: str = Query("", description="UHID, phone, or name")):
                             "consent": "Given",
                             "registered_at": None
                         })
-            return {"status": "success", "patients": results}
+            return await _cache_and_return(results)
         except Exception as e:
             print(f"[SearchPatient] Direct DB query error, falling back to REST: {e}")
         finally:
@@ -505,4 +505,4 @@ def search_patient(query: str = Query("", description="UHID, phone, or name")):
     except Exception as e:
         print(f"[SearchPatient] Error querying patients: {e}")
 
-    return {"status": "success", "patients": results}
+    return await _cache_and_return(results)

@@ -50,17 +50,31 @@ def generate_esanjeevani_inquiries(
         ]
     }
 
-    # Question 4: Targeted simple question based on report numbers
+    # Question 4: Targeted simple question based on report numbers or prescription
     abnormals = [p for p in parameters if p.get("status", "").upper() in ["HIGH", "LOW", "CRITICAL"]]
+    prescribed_meds = [p for p in parameters if any(k in p.get("name", "").lower() for k in ["rx:", "tab.", "cap.", "syrup", "medicine"])]
     q4 = None
+
+    if prescribed_meds and not abnormals:
+        q4 = {
+            "id": "q_medication_tolerance",
+            "question": "Regarding these prescribed medications: Have you experienced any stomach cramps, diarrhea, skin rash, or allergic reactions?",
+            "type": "radio",
+            "options": [
+                "Yes, skin rash, itching, or severe stomach upset",
+                "Mild nausea or drowsiness only",
+                "No side effects, taking medicines comfortably"
+            ]
+        }
 
     temp_val = follow_up_answers.get("current_temperature") or follow_up_answers.get("temperature") or ""
     temp_suffix = f" (fever {temp_val}°F)" if temp_val else ""
 
     for ab in abnormals:
         p_name = ab.get("name", "").lower()
-        val = str(ab.get("value", ""))
-        unit = ab.get("unit", "")
+        val = str(ab.get("value", "")).strip()
+        unit = str(ab.get("unit", "")).strip()
+        disp_val = val if (not unit or unit.lower() in val.lower()) else f"{val} {unit}"
         status = ab.get("status", "").upper()
 
         if "wbc" in p_name or "leukocyte" in p_name or "tlc" in p_name:
@@ -144,6 +158,29 @@ def generate_esanjeevani_inquiries(
                     "Yes, burning pain when passing urine",
                     "Mild discomfort or lower stomach pain",
                     "No burning pain"
+                ]
+            }
+        elif any(k in p_name for k in ["appendix", "appendicitis", "rif", "iliac"]):
+            q4 = {
+                "id": "q_appendicitis_red_flags",
+                "question": f"Your ultrasound shows suspected appendicitis ({ab.get('name')} {disp_val}): When you press on your lower right stomach, does it hurt sharply when you let go (rebound pain), or are you vomiting?",
+                "type": "radio",
+                "options": [
+                    "Yes, severe sharp pain when pressing/releasing, or unable to eat",
+                    "Constant mild ache in the lower right stomach only",
+                    "No severe pain and no vomiting"
+                ]
+            }
+            break
+        elif any(k in p_name for k in ["amoxicillin", "paracetamol", "rx", "tab.", "medicine"]):
+            q4 = {
+                "id": "q_medication_tolerance",
+                "question": "Regarding these prescribed medications: Have you experienced any stomach cramps, diarrhea, skin rash, or allergic reactions?",
+                "type": "radio",
+                "options": [
+                    "Yes, skin rash, itching, or severe stomach upset",
+                    "Mild nausea or drowsiness only",
+                    "No side effects, taking medicines comfortably"
                 ]
             }
             break

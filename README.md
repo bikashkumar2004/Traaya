@@ -401,8 +401,14 @@ source venv/bin/activate
 
 pip install -r requirements.txt
 python -m uvicorn main:app --host 127.0.0.1 --port 8000 --reload
+.\venv\Scripts\uvicorn.exe main:app --reload --port 8000
 ```
-*API Swagger Documentation is available at: `http://localhost:8000/docs`*
+*API Documentation available at:*
+- **Interactive Swagger UI**: `http://localhost:8000/docs`
+- **Direct Swagger Alias**: `http://localhost:8000/swagger`
+- **Clean ReDoc Reference**: `http://localhost:8000/redoc`
+- **Raw OpenAPI JSON**: `http://localhost:8000/openapi.json`
+
 
 ### 2. Frontend Setup
 ```bash

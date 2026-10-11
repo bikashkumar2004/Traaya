@@ -28,12 +28,14 @@ class CustomModelClient:
         max_tokens: int = 400,
         temperature: float = 0.2,
         model_name: Optional[str] = None,
-        timeout: float = 60.0
+        timeout: float = 30.0
     ) -> Optional[str]:
         """
         Sends an OpenAI-compatible /chat/completions request to the specified endpoint.
         """
         if not endpoint_url:
+            return None
+        if not self.hf_token and "router.huggingface.co" in endpoint_url:
             return None
 
         # Ensure correct completion path

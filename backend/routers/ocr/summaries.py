@@ -1,6 +1,6 @@
-from typing import List, Dict, Any, Tuple, Optional
+from typing import List, Dict, Any, Tuple
 
-def generate_patient_summary_details(test_name: str, parameters: List[Dict[str, Any]], clinical_flags: List[str], lifestyle_advice: Optional[List[str]] = None) -> Tuple[str, Dict[str, Any]]:
+def generate_patient_summary_details(test_name: str, parameters: List[Dict[str, Any]], clinical_flags: List[str]) -> Tuple[str, Dict[str, Any]]:
     """
     Generates plain-language, patient-centric summary details for patients
     who may struggle with complex medical terminology and lab biomarker metrics.
@@ -35,7 +35,9 @@ def generate_patient_summary_details(test_name: str, parameters: List[Dict[str, 
     abnormal_findings = []
     for p in abnormal:
         name = p.get("name", "")
-        val = f"{p.get('value')} {p.get('unit', '')}".strip()
+        raw_val = str(p.get("value", "")).strip()
+        raw_unit = str(p.get("unit", "")).strip()
+        val = raw_val if (not raw_unit or raw_unit.lower() in raw_val.lower()) else f"{raw_val} {raw_unit}".strip()
         st = p.get("status", "ABNORMAL").upper()
         nl = name.lower()
 
@@ -79,8 +81,17 @@ def generate_patient_summary_details(test_name: str, parameters: List[Dict[str, 
 
     normal_findings = [f"{p.get('name')}: Healthy ({p.get('value')} {p.get('unit', '')})".strip() for p in normal]
 
-    # Only include lifestyle tips if dynamically extracted from the document
-    real_lifestyle = [str(tip).strip() for tip in (lifestyle_advice or []) if str(tip).strip()]
+    what_to_ask_doctor = [
+        f"What is the most likely cause of my {abnormal[0]['name'] if abnormal else 'results'}?",
+        "Do I need any follow-up tests or specific medications?",
+        "What dietary or daily activity adjustments do you recommend for me?"
+    ]
+
+    lifestyle_tips = [
+        "Drink 8-10 glasses of clean water daily to support cell metabolism and kidney function.",
+        "Ensure 7-8 hours of sound sleep every night to help your body recuperate.",
+        "Keep a printed or digital copy of this report handy during your clinic or PHC visit."
+    ]
 
     summary_details = {
         "overview": patient_summary,
@@ -88,7 +99,8 @@ def generate_patient_summary_details(test_name: str, parameters: List[Dict[str, 
         "urgency": urgency,
         "abnormal_findings": abnormal_findings,
         "normal_findings": normal_findings,
-        "lifestyle_tips": real_lifestyle,
+        "what_to_ask_doctor": what_to_ask_doctor,
+        "lifestyle_tips": lifestyle_tips,
         "clinical_flags": clinical_flags
     }
 
