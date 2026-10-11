@@ -433,7 +433,7 @@ export function DoctorHistoryDetailView({
           {activeModalTab === "AI Summary" && (
             <div className="bg-white rounded-2xl border border-slate-200 p-6 shadow-xs space-y-4">
               <h2 className="text-sm font-bold text-slate-900">
-                TriageAssist Clinical Intelligence Summary
+                TRAAYA Clinical Intelligence Summary
               </h2>
               <div className="text-xs text-slate-700 space-y-3 leading-relaxed">
                 <p>

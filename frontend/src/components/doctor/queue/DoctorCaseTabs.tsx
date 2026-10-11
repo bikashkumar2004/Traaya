@@ -103,64 +103,85 @@ export function DoctorCaseTabs({
           </div>
 
           {/* Chief Complaint & Reported Symptoms Card */}
-          <div className="bg-white rounded-2xl border border-slate-200 p-5 shadow-xs space-y-3">
-            <div className="flex items-center gap-2">
-              <div className="w-7 h-7 rounded-lg bg-teal-50 text-teal-700 flex items-center justify-center">
-                <Activity className="w-4 h-4" />
+          <div className="bg-white rounded-2xl border border-slate-200 p-5 shadow-xs space-y-3.5">
+            <div className="flex items-center justify-between border-b border-slate-100 pb-2.5">
+              <div className="flex items-center gap-2">
+                <div className="w-7 h-7 rounded-lg bg-teal-50 text-teal-700 flex items-center justify-center">
+                  <Activity className="w-4 h-4" />
+                </div>
+                <h2 className="text-sm font-bold text-slate-900">
+                  Chief Complaint &amp; Clinical Summary
+                </h2>
               </div>
-              <h2 className="text-sm font-bold text-slate-900">
-                Chief Complaint &amp; Reported Symptoms
-              </h2>
+              <span className="text-[10px] font-bold text-teal-800 bg-teal-50 px-2.5 py-0.5 rounded-full border border-teal-200">
+                Symptoms Data
+              </span>
             </div>
 
-            <p className="text-xs text-slate-700 italic bg-teal-50/50 p-3 rounded-xl border border-teal-100">
-              &ldquo;{selectedCase.chiefComplaint}&rdquo;
-            </p>
-
-            {selectedCase.aiInfo && (
-              <div className="grid grid-cols-2 sm:grid-cols-4 gap-2 pt-1 text-xs">
-                <div className="p-2 bg-slate-50 rounded-xl border border-slate-100">
-                  <span className="text-[10px] text-slate-400 block">Duration</span>
-                  <span className="font-bold text-slate-800">
-                    {selectedCase.aiInfo.duration}
-                  </span>
-                </div>
-                <div className="p-2 bg-slate-50 rounded-xl border border-slate-100">
-                  <span className="text-[10px] text-slate-400 block">Severity</span>
-                  <span className="font-bold text-slate-800">
-                    {selectedCase.aiInfo.severity}
-                  </span>
-                </div>
-                <div className="p-2 bg-slate-50 rounded-xl border border-slate-100">
-                  <span className="text-[10px] text-slate-400 block">Associated</span>
-                  <span className="font-bold text-slate-800 truncate block">
-                    {selectedCase.aiInfo.associated}
-                  </span>
-                </div>
-                <div className="p-2 bg-slate-50 rounded-xl border border-slate-100">
-                  <span className="text-[10px] text-slate-400 block">Red Flags</span>
-                  <span className="font-bold text-rose-700 truncate block">
-                    {selectedCase.aiInfo.redFlags}
-                  </span>
-                </div>
-              </div>
-            )}
-
-            {selectedCase.aiInfo?.symptoms && selectedCase.aiInfo.symptoms.length > 0 && (
-              <div className="flex items-center gap-1.5 flex-wrap pt-1">
-                <span className="text-[11px] font-bold text-slate-500 mr-1">
-                  Reported Symptoms:
+            {/* 1. Reported Symptoms Chips (Top of card) */}
+            {(selectedCase.symptomsData?.symptoms?.length || selectedCase.aiInfo?.symptoms?.length) ? (
+              <div className="space-y-1.5 pt-0.5">
+                <span className="text-[11px] font-bold text-slate-500 uppercase tracking-wider block">
+                  Reported Symptoms
                 </span>
-                {selectedCase.aiInfo.symptoms.map((s, idx) => (
-                  <span
-                    key={idx}
-                    className="px-2.5 py-0.5 rounded-full text-[11px] font-semibold bg-slate-100 text-slate-700 border border-slate-200"
-                  >
-                    {s}
-                  </span>
-                ))}
+                <div className="flex items-center gap-1.5 flex-wrap">
+                  {(selectedCase.symptomsData?.symptoms || selectedCase.aiInfo.symptoms).map((s: string, idx: number) => (
+                    <span
+                      key={idx}
+                      className="px-2.5 py-0.5 rounded-md text-xs font-semibold bg-slate-100 text-slate-800 border border-slate-200"
+                    >
+                      {s}
+                    </span>
+                  ))}
+                </div>
               </div>
-            )}
+            ) : null}
+
+            {/* 2. Summary paragraph */}
+            <div className="text-xs text-slate-800 bg-teal-50/50 p-3.5 rounded-xl border border-teal-100 leading-relaxed font-medium whitespace-pre-wrap">
+              <span className="font-bold text-teal-950 block mb-1">Clinical Summary:</span>
+              {(() => {
+                const raw =
+                  selectedCase.symptomsData?.summary ||
+                  (selectedCase as any).symptoms_data?.summary ||
+                  (selectedCase as any).symptoms_data?.clinical_summary ||
+                  "";
+                if (raw && (raw.includes("?:") || raw.includes("Do you have") || (raw.includes("?") && raw.length > 120))) {
+                  const syms =
+                    selectedCase.symptomsData?.symptoms?.join(", ") ||
+                    (selectedCase as any).symptoms_data?.symptoms?.join(", ") ||
+                    selectedCase.aiInfo?.symptoms?.join(", ");
+                  const comp =
+                    (selectedCase as any).symptoms_data?.raw_complaint ||
+                    selectedCase.symptomsData?.raw_complaint ||
+                    selectedCase.chiefComplaint;
+                  if (syms && comp && comp.toLowerCase() !== syms.toLowerCase() && !comp.startsWith("Patient reports")) {
+                    return `Patient presents with ${syms}. Primary complaint: "${comp}".`;
+                  }
+                  if (syms) {
+                    return `Patient presents with ${syms} for clinical triage evaluation.`;
+                  }
+                }
+                return raw || selectedCase.chiefComplaint || "Clinical evaluation recorded.";
+              })()}
+            </div>
+
+            {/* 3. Questions & Answers key-value pairs */}
+            {selectedCase.symptomsData?.questions_answers && Object.keys(selectedCase.symptomsData.questions_answers).length > 0 ? (
+              <div className="space-y-1.5 pt-2 border-t border-slate-100">
+                <span className="text-[11px] font-bold text-slate-500 uppercase tracking-wider block">
+                  Patient Intake Responses
+                </span>
+                <div className="grid grid-cols-2 sm:grid-cols-4 gap-2 text-xs">
+                  {Object.entries(selectedCase.symptomsData.questions_answers).map(([key, val], idx) => (
+                    <div key={idx} className="p-2 bg-slate-50 rounded-xl border border-slate-200/80">
+                      <span className="text-[10px] text-slate-400 block capitalize">{key.replace(/_/g, " ")}</span>
+                      <span className="font-bold text-slate-800 block mt-0.5 truncate">{String(val)}</span>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            ) : null}
           </div>
 
           {/* Diagnostic Documents & Lab Slip Parser */}
@@ -269,24 +290,25 @@ export function DoctorCaseTabs({
             Clinical Intake Questionnaire Responses
           </h2>
           <div className="space-y-3 text-xs">
-            <div className="p-3 bg-slate-50 rounded-xl border border-slate-200">
-              <div className="font-semibold text-slate-800">
-                Do you have breathing difficulty or chest tightness?
+            {selectedCase.symptomsData?.raw_qa && selectedCase.symptomsData.raw_qa.length > 0 ? (
+              selectedCase.symptomsData.raw_qa.map((qa, i) => (
+                <div key={i} className="p-3 bg-slate-50 rounded-xl border border-slate-200">
+                  <div className="font-bold text-slate-900">Q: {qa.question}</div>
+                  <div className="text-slate-800 font-medium mt-1">A: {qa.answer}</div>
+                </div>
+              ))
+            ) : selectedCase.symptomsData?.questions_answers && Object.keys(selectedCase.symptomsData.questions_answers).length > 0 ? (
+              Object.entries(selectedCase.symptomsData.questions_answers).map(([key, val], i) => (
+                <div key={i} className="p-3 bg-slate-50 rounded-xl border border-slate-200">
+                  <div className="font-bold text-slate-900 capitalize">Q: {key.replace(/_/g, " ")}</div>
+                  <div className="text-slate-800 font-medium mt-1">A: {String(val)}</div>
+                </div>
+              ))
+            ) : (
+              <div className="p-4 text-center text-slate-500 bg-slate-50 rounded-xl border border-slate-200">
+                No adaptive questions recorded for this case.
               </div>
-              <div className="text-teal-800 font-bold mt-1">No &bull; Mild shortness of breath only after coughing</div>
-            </div>
-            <div className="p-3 bg-slate-50 rounded-xl border border-slate-200">
-              <div className="font-semibold text-slate-800">
-                Any history of Diabetes, Hypertension, or Kidney disease?
-              </div>
-              <div className="text-slate-700 mt-1">No chronic illness disclosed</div>
-            </div>
-            <div className="p-3 bg-slate-50 rounded-xl border border-slate-200">
-              <div className="font-semibold text-slate-800">
-                Have you taken any medication before visiting?
-              </div>
-              <div className="text-slate-700 mt-1">1 Tab Paracetamol 650mg taken yesterday evening with temporary relief</div>
-            </div>
+            )}
           </div>
         </div>
       )}
@@ -334,14 +356,17 @@ export function DoctorCaseTabs({
       {activeTab === "AI Summary" && (
         <div className="bg-white rounded-2xl border border-slate-200 p-6 shadow-xs space-y-4">
           <h2 className="text-sm font-bold text-slate-900">
-            TriageAssist Clinical Intelligence Summary
+            TRAAYA Clinical Intelligence Summary
           </h2>
           <div className="text-xs text-slate-700 space-y-3 leading-relaxed">
+            {selectedCase.symptomsData?.summary ? (
+              <div className="p-3.5 bg-teal-50/60 rounded-xl border border-teal-200/80 text-slate-800">
+                <span className="font-bold text-teal-950 block mb-1">Synthesized Clinical Summary:</span>
+                <p className="leading-relaxed">{selectedCase.symptomsData.summary}</p>
+              </div>
+            ) : null}
             <p>
-              <strong>Clinical Rationale:</strong> The patient presents with acute febrile illness of 3 days duration accompanied by systemic manifestations (myalgia, severe fatigue, headache). Mild leukocytosis (11,500 /µL) supports an active inflammatory etiology requiring differential diagnosis (Viral fever, Dengue, or early Typhoid prevalent in Nayagarh district).
-            </p>
-            <p>
-              <strong>Recommended Interventions:</strong> Immediate oral temperature and BP check, hydration encouragement, and doctor empirical prescription with generic antipyretic.
+              <strong>Clinical Rationale:</strong> {selectedCase.aiSuggestion?.reason || "Patient presents with acute symptoms requiring evaluation."}
             </p>
           </div>
         </div>

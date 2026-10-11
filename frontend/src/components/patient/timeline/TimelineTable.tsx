@@ -9,9 +9,8 @@ import {
   CheckCheck,
   Copy,
   Eye,
-  HelpCircle,
 } from "lucide-react";
-import { TriageTicket, normalizeStatus } from "./types";
+import { TriageTicket } from "./types";
 
 interface TimelineTableProps {
   loading: boolean;
@@ -75,7 +74,7 @@ export const TimelineTable: React.FC<TimelineTableProps> = ({
               className="inline-flex items-center gap-1.5 px-4 py-2.5 bg-teal-800 hover:bg-teal-900 text-white font-bold text-xs rounded-xl shadow-xs transition-colors"
             >
               <Plus className="w-4 h-4" />
-              <span>Report Symptoms Now</span>
+              <span>Book Appointment Now</span>
             </Link>
           )}
         </div>
@@ -180,21 +179,9 @@ export const TimelineTable: React.FC<TimelineTableProps> = ({
                       {getStatusBadge(ticket.status, ticket)}
                     </td>
 
-                    {/* View & Answer Action */}
+                    {/* View Action */}
                     <td className="py-4 px-4 text-center">
                       <div className="flex items-center justify-center gap-1.5 flex-wrap">
-                        {normalizeStatus(ticket.status) === "Reverted" ||
-                        (ticket.reverted_questions &&
-                          ticket.reverted_questions.some((q) => !q.answer)) ? (
-                          <Link
-                            href={`/citizen/timeline/${ticket.id}#nurse-questions`}
-                            className="inline-flex items-center justify-center gap-1 px-3 py-1.5 rounded-xl font-bold text-xs bg-amber-500 hover:bg-amber-600 text-white transition-all shadow-xs"
-                            title="Answer follow-up questions from nurse"
-                          >
-                            <HelpCircle className="w-3.5 h-3.5" />
-                            <span>Answer Questions</span>
-                          </Link>
-                        ) : null}
                         <Link
                           href={`/citizen/timeline/${ticket.id}`}
                           className="inline-flex items-center justify-center gap-1 px-3 py-1.5 rounded-xl font-bold text-xs bg-teal-50 hover:bg-teal-700 text-teal-800 hover:text-white border border-teal-200 hover:border-teal-700 transition-all shadow-2xs group/btn"

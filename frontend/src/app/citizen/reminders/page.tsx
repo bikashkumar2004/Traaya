@@ -35,11 +35,12 @@ export default function PatientRemindersPage() {
     } catch {}
   }, []);
 
-  // Quick vitals logger state
-  const [systolic, setSystolic] = useState("120");
-  const [diastolic, setDiastolic] = useState("80");
-  const [pulse, setPulse] = useState("72");
-  const [temperature, setTemperature] = useState("98.4");
+  // Quick vitals logger state initialized empty or from database
+  const [systolic, setSystolic] = useState("");
+  const [diastolic, setDiastolic] = useState("");
+  const [pulse, setPulse] = useState("");
+  const [temperature, setTemperature] = useState("");
+  const [spo2, setSpo2] = useState("");
   const [vitalsSaved, setVitalsSaved] = useState(false);
 
   // New Reminder Form State
@@ -51,13 +52,14 @@ export default function PatientRemindersPage() {
   const [newDescription, setNewDescription] = useState("");
   const [submitting, setSubmitting] = useState(false);
 
-  // Fetch reminders on mount
+  // Fetch reminders and latest logged vitals on mount
   const fetchReminders = async () => {
     if (!user?.id) {
       setLoading(false);
       return;
     }
     try {
+      // 1. Reminders
       const res = await fetch(`/api/patient/reminders?patient_id=${user.id}`);
       if (res.ok) {
         const data = await res.json();
@@ -67,8 +69,21 @@ export default function PatientRemindersPage() {
           sessionStorage.setItem("triage_cached_reminders", JSON.stringify(incoming));
         }
       }
+
+      // 2. Latest vitals from database
+      const vRes = await fetch(`/api/patient/reminders/vitals?patient_id=${user.id}`);
+      if (vRes.ok) {
+        const vData = await vRes.json();
+        if (vData.latest) {
+          if (vData.latest.systolic != null) setSystolic(String(vData.latest.systolic));
+          if (vData.latest.diastolic != null) setDiastolic(String(vData.latest.diastolic));
+          if (vData.latest.pulse != null) setPulse(String(vData.latest.pulse));
+          if (vData.latest.temperature != null) setTemperature(String(vData.latest.temperature));
+          if (vData.latest.spo2 != null) setSpo2(String(vData.latest.spo2));
+        }
+      }
     } catch (err) {
-      console.error("Error fetching reminders:", err);
+      console.error("Error fetching reminders/vitals:", err);
     } finally {
       setLoading(false);
     }
@@ -168,6 +183,7 @@ export default function PatientRemindersPage() {
           diastolic,
           pulse,
           temperature,
+          spo2,
         }),
       });
       setVitalsSaved(true);
@@ -266,6 +282,8 @@ export default function PatientRemindersPage() {
         setPulse={setPulse}
         temperature={temperature}
         setTemperature={setTemperature}
+        spo2={spo2}
+        setSpo2={setSpo2}
         vitalsSaved={vitalsSaved}
         onSaveVitals={handleSaveVitals}
       />

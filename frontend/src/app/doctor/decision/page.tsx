@@ -19,7 +19,8 @@ import {
   Building2,
   ArrowLeft,
   Clock,
-  UserCheck
+  UserCheck,
+  Activity
 } from "lucide-react";
 import Link from "next/link";
 
@@ -40,6 +41,14 @@ function ClinicalDecisionContent() {
     facility: "Community Health Centre (CHC) Khandapada",
     intakeNurse: "Priya Nair, ANM",
     chiefComplaint: "High fever (101.8°F), body chills, rigors, retro-orbital headache x 3 days",
+    symptoms: ["High fever", "Headache", "Chills"] as string[],
+    summary: "Patient has been experiencing high fever (101.8°F) with headache and rigors for 3 days.",
+    questionsAnswers: { temperature: "101.8°F", duration: "3 days", headache_severity: "Severe" } as Record<string, string>,
+    rawQa: [
+      { question: "What is your current or highest measured temperature?", answer: "101.8°F" },
+      { question: "How severe is your headache?", answer: "Severe" },
+      { question: "How long have you had symptoms?", answer: "3 days" }
+    ] as Array<{ question: string; answer: string }>,
     vitals: {
       spo2: 96,
       bp_sys: 124,
@@ -98,7 +107,13 @@ function ClinicalDecisionContent() {
               abhaId: pUhid,
               facility: "Community Health Centre (CHC) Khandapada",
               intakeNurse: "Priya Nair, ANM",
-              chiefComplaint: sdata.chief_complaint || "Acute symptoms requiring evaluation",
+              chiefComplaint: sdata.summary || sdata.chief_complaint || "Acute symptoms requiring evaluation",
+              symptoms: Array.isArray(sdata.symptoms)
+                ? sdata.symptoms.map((s: any) => (typeof s === "string" ? s : s?.name || ""))
+                : [],
+              summary: sdata.summary || sdata.chief_complaint || "",
+              questionsAnswers: typeof sdata.questions_answers === "object" ? sdata.questions_answers : {},
+              rawQa: Array.isArray(sdata.raw_qa) ? sdata.raw_qa : [],
               vitals: {
                 spo2: rawVitals.spo2 || 96,
                 bp_sys: rawVitals.bp_sys || 120,
@@ -130,6 +145,7 @@ function ClinicalDecisionContent() {
           const json = await res.json();
           if (json.status === "success" && json.ticket) {
             const t = json.ticket;
+            const sdata = t.symptoms_data || {};
             const urgencyNorm = (t.urgency || "").toLowerCase().includes("urgent")
               ? "Urgent"
               : (t.urgency || "").toLowerCase().includes("priority")
@@ -141,7 +157,13 @@ function ClinicalDecisionContent() {
               name: t.patient_name || prev.name,
               age: t.patient_age || prev.age,
               gender: t.patient_gender || prev.gender,
-              chiefComplaint: t.chief_complaint || prev.chiefComplaint,
+              chiefComplaint: sdata.summary || sdata.chief_complaint || t.chief_complaint || prev.chiefComplaint,
+              symptoms: Array.isArray(sdata.symptoms)
+                ? sdata.symptoms.map((s: any) => (typeof s === "string" ? s : s?.name || ""))
+                : prev.symptoms,
+              summary: sdata.summary || sdata.chief_complaint || prev.summary,
+              questionsAnswers: typeof sdata.questions_answers === "object" ? sdata.questions_answers : prev.questionsAnswers,
+              rawQa: Array.isArray(sdata.raw_qa) ? sdata.raw_qa : prev.rawQa,
               currentUrgency: urgencyNorm,
             }));
             setOverrideUrgency(urgencyNorm);
@@ -298,6 +320,70 @@ function ClinicalDecisionContent() {
         canVerify={true}
         onToggleVerify={handleToggleVerification}
       />
+
+      {/* Reported Symptoms & Clinical Summary Card */}
+      <div className="bg-white rounded-2xl border border-slate-200 p-6 shadow-xs space-y-4">
+        <div className="flex items-center justify-between border-b border-slate-100 pb-3">
+          <div className="flex items-center gap-2">
+            <Activity className="w-4 h-4 text-teal-600" />
+            <h2 className="text-sm font-bold text-slate-900">
+              Reported Symptoms &amp; Clinical Summary
+            </h2>
+          </div>
+          <span className="text-[10px] font-bold px-2.5 py-0.5 rounded-full bg-teal-50 text-teal-800 border border-teal-200">
+            Intake Symptoms Data
+          </span>
+        </div>
+
+        {/* 1. Summary paragraph */}
+        <div className="p-3.5 bg-teal-50/50 rounded-xl border border-teal-100 text-xs text-slate-800 leading-relaxed font-medium">
+          <span className="font-bold text-teal-950 block mb-1">Clinical Summary:</span>
+          {patientData.summary || patientData.chiefComplaint}
+        </div>
+
+        {/* 2. Symptoms Chips */}
+        {patientData.symptoms.length > 0 && (
+          <div className="space-y-1.5">
+            <span className="text-[11px] font-bold text-slate-500 uppercase tracking-wider block">
+              Identified Symptoms
+            </span>
+            <div className="flex flex-wrap gap-2">
+              {patientData.symptoms.map((sym, i) => (
+                <span
+                  key={i}
+                  className="px-3 py-1 bg-slate-100 text-slate-800 rounded-lg text-xs font-semibold border border-slate-200"
+                >
+                  {sym}
+                </span>
+              ))}
+            </div>
+          </div>
+        )}
+
+        {/* 3. Questions & Answers */}
+        {(patientData.rawQa.length > 0 || Object.keys(patientData.questionsAnswers).length > 0) && (
+          <div className="space-y-2 pt-2 border-t border-slate-100">
+            <span className="text-[11px] font-bold text-slate-500 uppercase tracking-wider block">
+              Patient Intake Responses (Q&amp;A)
+            </span>
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 text-xs">
+              {patientData.rawQa.length > 0
+                ? patientData.rawQa.map((qa, i) => (
+                    <div key={i} className="p-2.5 bg-slate-50 rounded-xl border border-slate-200/80">
+                      <span className="text-[11px] text-slate-500 block leading-tight">{qa.question}</span>
+                      <strong className="text-slate-900 font-semibold block mt-0.5">{qa.answer}</strong>
+                    </div>
+                  ))
+                : Object.entries(patientData.questionsAnswers).map(([k, v], i) => (
+                    <div key={i} className="p-2.5 bg-slate-50 rounded-xl border border-slate-200/80">
+                      <span className="text-[11px] text-slate-500 block capitalize">{k.replace(/_/g, " ")}</span>
+                      <strong className="text-slate-900 font-semibold block mt-0.5">{v}</strong>
+                    </div>
+                  ))}
+            </div>
+          </div>
+        )}
+      </div>
 
       {/* Clinical Differential & Override Form */}
       <div className="grid grid-cols-1 lg:grid-cols-12 gap-8 items-start">

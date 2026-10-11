@@ -2,7 +2,7 @@ import React from "react";
 import { PatientShell } from "@/components/patient/PatientShell";
 
 export const metadata = {
-  title: "Citizen Health Portal | TriageAssist",
+  title: "Citizen Health Portal | TRAAYA",
   description: "ABDM Connected Primary Healthcare & Triage Assistive Portal for Citizens",
 };
 

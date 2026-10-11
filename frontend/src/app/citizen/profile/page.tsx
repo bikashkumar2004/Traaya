@@ -357,7 +357,7 @@ export default function PatientProfilePage() {
       allergen: newAllergenName.trim(),
       severity: newAllergySeverity,
       reaction: newAllergyReaction.trim() || undefined,
-      reportedYear: new Date().getFullYear().toString(),
+      reportedYear: new Date().toDateString()
     };
 
     const updated = [...allergies, newItem];

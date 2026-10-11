@@ -17,6 +17,16 @@
 /.next/
 /out/
 
+# Python cache
+__pycache__/
+**/__pycache__/
+*.py[cod]
+*$py.class
+
+# Python virtual environments
+venv/
+.venv/
+
 # production
 /build
 

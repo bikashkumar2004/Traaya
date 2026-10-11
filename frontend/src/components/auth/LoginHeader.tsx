@@ -34,12 +34,11 @@ export const LoginHeader: React.FC<LoginHeaderProps> = ({
         <div className="flex items-center justify-between h-16">
           {/* Logo */}
           <Link href="/" className="flex items-center gap-2.5 group">
-            <div className="w-8 h-8 rounded-xl bg-teal-700 flex items-center justify-center text-white shadow-xs group-hover:scale-105 transition-transform">
-              <Activity className="w-4 h-4" />
-            </div>
-            <span className="font-extrabold text-lg tracking-tight text-slate-900">
-              Triage<span className="text-teal-700">Assist</span>
-            </span>
+            <img
+              src="/traaya-logo.png"
+              alt="TRAAYA Logo"
+              className="h-9 w-auto object-contain shrink-0 group-hover:scale-105 transition-transform"
+            />
           </Link>
 
           {/* Right Action Items */}

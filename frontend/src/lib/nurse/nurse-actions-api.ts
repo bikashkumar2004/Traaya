@@ -400,3 +400,58 @@ export async function submitLiveNurseAction(payload: {
 
   return false;
 }
+
+export async function updateLiveTriageAssessment(
+  caseNumber: string,
+  priority: string,
+  summary: string
+): Promise<boolean> {
+  const cleanId = String(caseNumber).replace(/^#?LS/i, "").trim();
+
+  if (supabase) {
+    try {
+      const { data: tickets } = await supabase
+        .from("triage_tickets")
+        .select("id, symptoms_data")
+        .or(`case_number.eq.${caseNumber},case_number.eq.${cleanId},id.eq.${cleanId}`);
+
+      const ticket = tickets && tickets[0];
+      if (ticket) {
+        const existingData =
+          typeof ticket.symptoms_data === "object" && ticket.symptoms_data !== null
+            ? ticket.symptoms_data
+            : {};
+
+        const updatedData = {
+          ...existingData,
+          summary: summary,
+        };
+
+        await supabase
+          .from("triage_tickets")
+          .update({
+            priority: priority,
+            urgency: priority,
+            symptoms_data: updatedData,
+          })
+          .eq("id", ticket.id);
+
+        return true;
+      }
+    } catch (err) {
+      console.warn("[NurseAPI] Notice persisting assessment to Supabase:", err);
+    }
+  }
+
+  try {
+    await fetch(`${API_BASE}/api/nurse/triage/assessment`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ case_number: caseNumber, priority, summary }),
+    });
+  } catch {
+    // ignore
+  }
+
+  return true;
+}

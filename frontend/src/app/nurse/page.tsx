@@ -16,7 +16,7 @@ import {
   submitLiveNurseIntake,
 } from "@/lib/nurse-api";
 import { supabase, isSupabaseConfigured } from "@/lib/supabase";
-import { Database, RefreshCw, CheckCircle2 } from "lucide-react";
+import { CheckCircle2 } from "lucide-react";
 import { useAuth } from "@/lib/auth-context";
 
 function NursePortalContent() {
@@ -223,51 +223,6 @@ function NursePortalContent() {
         </div>
       )}
 
-      {/* Database Connection Status Bar */}
-      <div className="flex items-center justify-between px-1 mb-4 text-xs">
-        <div className="flex items-center gap-2">
-          <span className="relative flex h-2 w-2">
-            <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-emerald-400 opacity-75"></span>
-            <span className="relative inline-flex rounded-full h-2 w-2 bg-emerald-500"></span>
-          </span>
-          <span className="font-semibold text-slate-600 flex items-center gap-1.5">
-            <Database className="w-3.5 h-3.5 text-teal-700" />
-            <span>
-              Live Database:{" "}
-              <strong className="text-teal-900">
-                {dbSource === "api"
-                  ? "PostgreSQL via API (Online)"
-                  : dbSource === "supabase"
-                  ? "Supabase Direct (Online)"
-                  : "PostgreSQL Seeded"}
-              </strong>
-            </span>
-            <span className="text-slate-400 hidden sm:inline">&bull;</span>
-            <span className="text-slate-500 hidden sm:inline">
-              {cases.length} Total Registered Cases
-            </span>
-            {user?.facilityName && (
-              <>
-                <span className="text-slate-400 hidden sm:inline">&bull;</span>
-                <span className="text-teal-900 font-bold bg-teal-50 px-2 py-0.5 rounded border border-teal-200 hidden sm:inline">
-                  Facility: {user.facilityName}
-                </span>
-              </>
-            )}
-          </span>
-        </div>
-
-        <button
-          type="button"
-          onClick={loadData}
-          disabled={loadingDb}
-          className="flex items-center gap-1.5 px-2.5 py-1 rounded-lg text-slate-600 hover:text-teal-800 hover:bg-white border border-slate-200 text-[11px] font-semibold transition-all cursor-pointer"
-          title="Refresh Queue from Database"
-        >
-          <RefreshCw className={`w-3 h-3 ${loadingDb ? "animate-spin text-teal-600" : ""}`} />
-          <span>{loadingDb ? "Syncing..." : "Refresh Live Data"}</span>
-        </button>
-      </div>
 
       {/* 1. DASHBOARD VIEW */}
       {activeTab === "dashboard" && (
@@ -294,6 +249,12 @@ function NursePortalContent() {
             caseData={selectedCase}
             onBack={() => setSelectedCase(null)}
             onSubmitAction={handleActionSubmit}
+            onUpdateCase={(updated) => {
+              setSelectedCase((prev) => (prev ? { ...prev, ...updated } : null));
+              setCases((prev) =>
+                prev.map((c) => (c.id === selectedCase.id ? { ...c, ...updated } : c))
+              );
+            }}
           />
         ) : (
           <TriageQueueView
@@ -326,10 +287,10 @@ export default function NursePage() {
   return (
     <Suspense
       fallback={
-        <div className="min-h-screen flex items-center justify-center bg-[#f4f7fb]">
+        <div className="min-h-screen flex items-center justify-center bg-[#F3F9F7]">
           <div className="flex items-center gap-3 text-teal-800 font-bold text-sm">
             <span className="w-3 h-3 rounded-full bg-teal-600 animate-ping" />
-            <span>Loading TriageAssist Nurse Station...</span>
+            <span>Loading TRAAYA Nurse Station...</span>
           </div>
         </div>
       }

@@ -49,9 +49,12 @@ class QwenTriageCaseSubmission(BaseModel):
     family_member_gender: Optional[str] = None
     family_member_phone: Optional[str] = None
     language: Optional[str] = "English"
+    raw_complaint: Optional[str] = None
+    symptom_text: Optional[str] = None
     symptoms: List[str] = []
     timeline: List[Dict[str, Any]] = []
     follow_up_answers: Dict[str, Any] = {}
+    follow_up_questions: Optional[List[Dict[str, Any]]] = None
     report_data: Optional[Dict[str, Any]] = None
     report_answers: Optional[Dict[str, Any]] = None
     present_state: str = "Odisha"

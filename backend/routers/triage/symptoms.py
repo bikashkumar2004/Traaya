@@ -8,7 +8,7 @@ from fastapi import APIRouter, HTTPException
 import httpx
 
 from clinical_engine import ClinicalTriageEngine
-from config import HF_TOKEN, SUPABASE_URL, SUPABASE_KEY, TRIAGE_MODEL_URL
+from config import HF_TOKEN, SUPABASE_URL, SUPABASE_KEY, TRIAGE_MODEL_URL, GROQ_API_KEY
 from agents.triage_agent import triage_agent
 from .schemas import (
     TriageAssessmentRequest,
@@ -127,16 +127,174 @@ async def qwen_priority_and_submit(case: QwenTriageCaseSubmission):
                 "Prefer": "return=representation"
             }
             
+            # Build raw_qa and 1-2 word questions_answers
+            raw_qa = []
+            questions_answers = {}
+            processed_keys = set()
+
+            def to_short_key(id_str: str, q_str: str) -> str:
+                text = f"{q_str} {id_str}".lower()
+                id_lower = (id_str or "").lower()
+
+                # 1. Recurrence & Frequency (checked first so "how often does fever/shivering come back" maps accurately)
+                if "come back" in text or "how often" in text or "frequency" in id_lower:
+                    return "recurrence_frequency"
+
+                # 2. Associated Symptoms & Red Flags (checked before single symptom matches)
+                if (
+                    "cough, sore throat" in text or
+                    "skin spots" in text or
+                    "other problems" in text or
+                    "associated" in text or
+                    "associated_symptoms" in id_lower or
+                    ("vomiting" in text and "cough" in text) or
+                    ("spots" in text and "bleeding" in text)
+                ):
+                    return "associated_symptoms"
+
+                # 3. Daily persistence / duration during the day
+                if "how long does the fever stay high" in text or ("stay high" in text and "day" in text):
+                    return "daily_persistence"
+
+                # 4. Fever & Temperature specific
+                if "how high" in text or ("fever" in text and "shiver" in text) or "chills" in text:
+                    return "fever_and_chills"
+                if "how many days" in text or "days have you had this fever" in text or ("onset" in id_lower and "fever" in text):
+                    return "fever_duration"
+                if "feel during the day" in text or "how does the fever feel" in text:
+                    return "daily_fever_pattern"
+                if "fever medicine" in text or "paracetamol" in text or ("medicine" in text and "bring the fever down" in text):
+                    return "medicine_response"
+                if "temperature" in text or "temp" in text:
+                    return "body_temperature"
+
+                # 5. Weakness, mental state & fatigue
+                if "how weak" in text or "sleepy" in text or "dizzy" in text or "confused" in text:
+                    return "weakness_severity"
+
+                # 6. Spreading / Radiation / Bones / Joints
+                if "spreading" in text or "bones" in text or "joints" in text or "move" in text or "radiation" in id_lower:
+                    if "bone" in text or "joint" in text:
+                        return "joint_or_bone_pain"
+                    return "pain_radiation"
+
+                # 7. Pain Location & Site
+                if "where does" in text or "where on your body" in text or "where in your chest" in text or "hurt most" in text or "location" in id_lower:
+                    return "pain_location"
+
+                # 8. Onset / Timing / Start
+                if "when did" in text or "did it happen suddenly" in text or "start time" in text or "onset" in id_lower:
+                    return "onset_timing"
+
+                # 9. Aggravating & Relieving Factors
+                if "better or worse" in text or "touching your belly" in text or "aggravating" in id_lower:
+                    return "aggravating_relieving_factors"
+
+                # 9. Specific organ complaints
+                if "chest pain" in text or "chest" in id_lower:
+                    return "chest_pain"
+                if "headache" in text:
+                    return "headache_severity"
+                if "breath" in text or "dyspnea" in text or "gasping" in text:
+                    return "breathing_difficulty"
+                if "cough" in text:
+                    return "cough_details"
+                if "vomit" in text or "nausea" in text:
+                    return "vomiting_nausea"
+                if "rash" in text or "spot" in text:
+                    return "skin_rashes"
+                if "stomach" in text or "belly" in text or "abdomen" in text:
+                    return "abdominal_pain"
+
+                # 10. Character & Severity generic
+                if "character" in id_lower or "kind of pain" in text or "what does it feel like" in text:
+                    return "symptom_character"
+                if "severity" in id_lower or "scale of 0 to 10" in text or "how strong" in text or "pain" in text:
+                    return "pain_severity"
+                if "duration" in id_lower or "how long" in text:
+                    return "symptom_duration"
+
+                # 11. Clean semantic fallback
+                clean_str = re.sub(r'^q\d+[_a-z0-9]*', '', f"{q_str} {id_str}", flags=re.IGNORECASE)
+                clean_str = re.sub(r'[^a-zA-Z0-9 ]', ' ', clean_str).lower()
+                stop_words = {"how", "what", "where", "when", "does", "do", "you", "your", "have", "with", "the", "a", "an", "is", "are", "along", "most", "any"}
+                words = [w for w in clean_str.split() if len(w) > 2 and w not in stop_words]
+                if len(words) >= 2:
+                    return f"{words[0]}_{words[1]}"
+                if len(words) == 1:
+                    return words[0]
+                return "clinical_detail"
+
+            for fq in (case.follow_up_questions or []):
+                q_text = fq.get("question") or fq.get("title") or ""
+                q_id = fq.get("id") or ""
+                ans_val = case.follow_up_answers.get(q_id) if case.follow_up_answers else None
+                if ans_val is None and case.follow_up_answers:
+                    ans_val = case.follow_up_answers.get(q_text)
+                if ans_val is not None and str(ans_val).strip():
+                    unit = fq.get("unit") or ""
+                    formatted_ans = str(ans_val).strip() + (unit if unit and unit not in str(ans_val) else "")
+                    raw_qa.append({"question": q_text or q_id, "answer": formatted_ans})
+                    short_k = to_short_key(q_id, q_text)
+                    questions_answers[short_k] = formatted_ans
+                    if q_id:
+                        processed_keys.add(q_id)
+                    if q_text:
+                        processed_keys.add(q_text)
+
+            for k, v in (case.follow_up_answers or {}).items():
+                if k not in processed_keys and v is not None and str(v).strip():
+                    ans_str = str(v).strip()
+                    raw_qa.append({"question": k, "answer": ans_str})
+                    short_k = to_short_key("", k)
+                    questions_answers[short_k] = ans_str
+
+            raw_complaint = (getattr(case, "raw_complaint", None) or getattr(case, "symptom_text", None) or "").strip()
+            syms_str = ", ".join(case.symptoms) if case.symptoms else "clinical symptoms"
+
+            # Simple clean summary fallback (never dump full questions and answers)
+            if raw_complaint:
+                summary_text = f"Patient presents with {syms_str}. Primary complaint: {raw_complaint}."
+            else:
+                summary_text = f"Patient presents with {syms_str} for clinical triage evaluation."
+
+            groq_key = GROQ_API_KEY or ""
+            if groq_key:
+                try:
+                    qa_context = ". ".join([f"{i['question']}: {i['answer']}" for i in raw_qa[:6]])
+                    prompt = f"Reported Symptoms: {syms_str}\nPrimary Complaint: {raw_complaint or 'None'}\nIntake Details: {qa_context or 'None'}"
+                    for gm in ["llama-3.3-70b-versatile", "llama-3.1-8b-instant"]:
+                        with httpx.Client(timeout=4.0) as client:
+                            resp = client.post(
+                                "https://api.groq.com/openai/v1/chat/completions",
+                                headers={
+                                    "Authorization": f"Bearer {groq_key}",
+                                    "Content-Type": "application/json"
+                                },
+                                json={
+                                    "model": gm,
+                                    "messages": [
+                                        {"role": "system", "content": "You are an emergency clinical triage assistant. Generate a simple, concise 1 to 2 sentence clinical summary (maximum 30 words) describing the patient's condition. Do NOT repeat or list questions or answers verbatim. Do NOT use bullet points, markdown bolding, or headers. Output only plain summary text."},
+                                        {"role": "user", "content": prompt}
+                                    ],
+                                    "temperature": 0.2,
+                                    "max_tokens": 100
+                                }
+                            )
+                            if resp.status_code == 200:
+                                parsed_c = resp.json().get("choices", [{}])[0].get("message", {}).get("content", "").strip()
+                                if parsed_c and "?:" not in parsed_c and len(parsed_c) < 280:
+                                    summary_text = parsed_c.strip("\"'")
+                                    break
+                except Exception as ge:
+                    print(f"[Groq Summary Exception]: {ge}")
             symptoms_data = {
-                "chief_complaint": ", ".join(case.symptoms) if case.symptoms else "Reported Symptoms",
+                "symptoms": case.symptoms or [],
+                "raw_complaint": raw_complaint or (", ".join(case.symptoms) if case.symptoms else ""),
+                "summary": summary_text,
+                "questions_answers": questions_answers,
+                "raw_qa": raw_qa,
                 "current_step": case.current_step if case.current_step else 1,
-                "symptoms": [{"name": s, "duration": "Active"} for s in case.symptoms],
-                "duration": "3 days",
-                "severity": "Severe" if priority == "Red" else ("Moderate" if priority == "Yellow" else "Mild"),
-                "timeline": case.timeline or [],
-                "follow_up_answers": case.follow_up_answers,
-                "vitals": {"temperature": f"{temp_val}°F"},
-                "clinical_reasoning": clinical_reasoning,
             }
 
             is_family = bool(

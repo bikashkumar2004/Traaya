@@ -69,7 +69,7 @@ export function NurseShell({
   };
 
   return (
-    <div className="flex min-h-screen bg-[#f4f7fb] text-slate-800 antialiased font-sans">
+    <div className="flex min-h-screen bg-[#F3F9F7] text-slate-800 antialiased font-sans">
       {/* Mobile Drawer Overlay */}
       {mobileSidebarOpen && (
         <div
@@ -78,9 +78,9 @@ export function NurseShell({
         />
       )}
 
-      {/* LEFT SIDEBAR (Light Soft Blue #EAF1FF like patient page) - Fixed Position */}
+      {/* LEFT SIDEBAR (Light Soft Blue #ffffff like patient page) - Fixed Position */}
       <aside
-        className={`fixed inset-y-0 left-0 z-40 w-64 h-screen bg-[#EAF1FF] text-slate-800 flex flex-col justify-between border-r border-blue-200/70 transition-transform duration-200 ${
+        className={`fixed inset-y-0 left-0 z-40 w-64 h-screen bg-[#ffffff] text-slate-800 flex flex-col justify-between border-r border-blue-200/70 transition-transform duration-200 ${
           mobileSidebarOpen ? "translate-x-0 shadow-2xl z-50" : "-translate-x-full lg:translate-x-0"
         }`}
       >
@@ -88,17 +88,12 @@ export function NurseShell({
           {/* Top Brand with Landing Page Logo */}
           <div className="p-4 border-b border-blue-200/60 flex items-center justify-between shrink-0">
             <Link href="/nurse" className="flex items-center gap-2.5 group">
-              <div className="w-8 h-8 rounded-xl bg-teal-700 flex items-center justify-center text-white shadow-xs group-hover:scale-105 transition-transform shrink-0">
-                <Activity className="w-4 h-4" />
-              </div>
-              <div className="flex flex-col min-w-0">
-                <span className="font-extrabold text-base tracking-tight text-slate-900 leading-tight">
-                  Triage<span className="text-teal-700">Assist</span>
-                </span>
-                <span className="text-[10px] font-semibold text-teal-800 tracking-wide leading-none mt-1">
-                  Nurse Command Station
-                </span>
-              </div>
+              <img
+                src="/traaya-logo.png"
+                alt="TRAAYA Logo"
+                className="h-9 w-auto object-contain shrink-0 group-hover:scale-105 transition-transform"
+              />
+              
             </Link>
 
             <button

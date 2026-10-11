@@ -39,8 +39,12 @@ export interface TriageTicket {
   schedule_time?: string;
   symptoms?: Array<{ name: string; duration?: string }>;
   symptoms_data?: {
+    raw_complaint?: string;
     chief_complaint?: string;
-    symptoms?: Array<{ name: string; duration?: string; severity?: string }>;
+    summary?: string;
+    symptoms?: any;
+    questions_answers?: Record<string, string>;
+    raw_qa?: Array<{ question: string; answer: string }>;
     duration?: string;
     severity?: string;
     follow_up_qa?: Array<{ question: string; answer: string }>;

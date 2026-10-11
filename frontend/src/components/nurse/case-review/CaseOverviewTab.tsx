@@ -1,6 +1,6 @@
 "use client";
 
-import React from "react";
+import React, { useState, useEffect, useMemo } from "react";
 import {
   User,
   Edit2,
@@ -9,18 +9,22 @@ import {
   FileText,
   Sparkles,
   AlertTriangle,
+  AlertCircle,
   CheckCircle2,
-  HeartPulse,
-  ShieldAlert,
-  Building2,
+  MessageSquare,
+  ExternalLink,
+  Loader2,
+  HelpCircle,
 } from "lucide-react";
 import { CaseDetails } from "../CaseReviewWorkspace";
+import { updateLiveTriageAssessment } from "@/lib/nurse/nurse-actions-api";
 
 interface CaseOverviewTabProps {
   caseData: CaseDetails;
   setActiveTab: (tab: string) => void;
   setReportModalOpen: (open: boolean) => void;
   setMissingModalOpen: (open: boolean) => void;
+  onUpdateCase?: (updated: Partial<CaseDetails>) => void;
 }
 
 export function CaseOverviewTab({
@@ -28,7 +32,238 @@ export function CaseOverviewTab({
   setActiveTab,
   setReportModalOpen,
   setMissingModalOpen,
+  onUpdateCase,
 }: CaseOverviewTabProps) {
+  const rawComplaint = (() => {
+    const summaryText = (
+      caseData.symptomsData?.summary ||
+      (caseData as any).symptoms_data?.summary ||
+      ""
+    ).trim();
+
+    // 1. Direct raw_complaint from symptoms_data
+    const directRaw = (
+      (caseData as any).symptoms_data?.raw_complaint ||
+      caseData.symptomsData?.raw_complaint ||
+      ""
+    ).trim();
+
+    // If directRaw is not identical to the summary text and doesn't start with "Patient reports", use it!
+    if (directRaw && directRaw !== summaryText && !directRaw.startsWith("Patient reports")) {
+      return directRaw;
+    }
+
+    // 2. Complaint or chiefComplaint fallbacks
+    const sdata = (caseData as any).symptoms_data || caseData.symptomsData || {};
+    if (sdata.raw_complaint && sdata.raw_complaint.trim() !== summaryText && !sdata.raw_complaint.startsWith("Patient reports")) {
+      return sdata.raw_complaint.trim();
+    }
+    if (sdata.complaint && sdata.complaint.trim() !== summaryText && !sdata.complaint.startsWith("Patient reports")) {
+      return sdata.complaint.trim();
+    }
+    if (caseData.chiefComplaint && caseData.chiefComplaint.trim() !== summaryText && !caseData.chiefComplaint.startsWith("Patient reports")) {
+      return caseData.chiefComplaint.trim();
+    }
+
+    if (directRaw && directRaw !== summaryText) {
+      return directRaw;
+    }
+
+    const syms = caseData.symptomsData?.symptoms || (caseData as any).symptoms_data?.symptoms || caseData.aiInfo?.symptoms || [];
+    if (syms.length > 0) {
+      return syms.join(", ");
+    }
+
+    return directRaw || "No initial raw complaint provided.";
+  })();
+
+  const resolveSummary = () => {
+    const raw = (
+      caseData.symptomsData?.summary ||
+      (caseData as any).symptoms_data?.summary ||
+      (caseData as any).symptoms_data?.clinical_summary ||
+      ""
+    ).trim();
+
+    // Check if the stored summary is the old dump containing raw questions & answers (contains '?:' or 'Do you have' or is a question dump)
+    if (raw && (raw.includes("?:") || raw.includes("Do you have") || (raw.includes("?") && raw.length > 120))) {
+      const syms =
+        caseData.symptomsData?.symptoms?.join(", ") ||
+        (caseData as any).symptoms_data?.symptoms?.join(", ") ||
+        caseData.aiInfo?.symptoms?.join(", ");
+
+      const comp = rawComplaint && !rawComplaint.startsWith("Patient reports") && !rawComplaint.includes("?:") ? rawComplaint : "";
+      if (syms && comp && comp.toLowerCase() !== syms.toLowerCase()) {
+        return `Patient presents with ${syms}. Primary complaint: "${comp}".`;
+      }
+      if (syms) {
+        return `Patient presents with ${syms} for clinical triage evaluation.`;
+      }
+    }
+
+    return raw || (caseData.chiefComplaint ? `Patient presents with ${caseData.chiefComplaint}.` : "Patient intake recorded at triage desk.");
+  };
+
+  const rawQaList: Array<{ question: string; answer: string }> = (() => {
+    const list =
+      caseData.symptomsData?.raw_qa ||
+      (caseData as any).symptoms_data?.raw_qa;
+    if (Array.isArray(list) && list.length > 0) {
+      return list
+        .map((item: any) => ({
+          question: typeof item === "object" ? item.question || item.q || "" : String(item),
+          answer: typeof item === "object" ? item.answer || item.a || "" : "",
+        }))
+        .filter((item: { question: string; answer: string }) => item.question && item.answer);
+    }
+
+    const qaMap =
+      caseData.symptomsData?.questions_answers ||
+      (caseData as any).symptoms_data?.questions_answers;
+    if (typeof qaMap === "object" && qaMap !== null && Object.keys(qaMap).length > 0) {
+      return Object.entries(qaMap).map(([k, v]) => ({
+        question: k.replace(/_/g, " ").replace(/\b\w/g, (c) => c.toUpperCase()),
+        answer: String(v),
+      }));
+    }
+
+    return [];
+  })();
+
+  const normalizedRevertedQuestions = useMemo(() => {
+    const raw =
+      caseData.revertedQuestions ||
+      (caseData as any).symptoms_data?.reverted_questions ||
+      caseData.symptomsData?.questions_answers?.reverted_questions;
+    if (!raw) return [];
+    let list = raw;
+    if (typeof list === "string") {
+      try {
+        list = JSON.parse(list);
+      } catch {
+        list = list
+          .split("\n")
+          .map((line: string) => line.trim())
+          .filter(Boolean)
+          .map((line: string, idx: number) => ({ id: `q_${idx + 1}`, question: line, answer: "" }));
+      }
+    }
+    if (!Array.isArray(list)) {
+      list = typeof list === "object" && list !== null ? [list] : [];
+    }
+    return list
+      .map((q: any, idx: number) => {
+        if (typeof q === "string") {
+          return { id: `q_${idx + 1}`, question: q.trim(), answer: "" };
+        }
+        return {
+          id: String(q.id || `q_${idx + 1}`),
+          question: q.question || q.q || q.title || q.text || "",
+          answer: q.answer || "",
+          answered_at: q.answered_at,
+        };
+      })
+      .filter((q: any) => q.question && q.question.trim().length > 0);
+  }, [caseData.revertedQuestions, (caseData as any).symptoms_data, caseData.symptomsData]);
+
+  const reportData =
+    caseData.uploadedReportData ||
+    (caseData as any).uploaded_report_data ||
+    {};
+
+  const reportUrl =
+    caseData.uploadedReportUrl ||
+    (caseData as any).report_url ||
+    reportData.file_url ||
+    reportData.url;
+
+  const reportName =
+    reportData.file_name ||
+    reportData.fileName ||
+    reportData.name ||
+    (caseData.reports && caseData.reports.length > 0 ? caseData.reports[0] : null) ||
+    "Uploaded_Medical_Report.pdf";
+
+  const testName =
+    reportData.test_name ||
+    reportData.testName ||
+    "Diagnostic Lab Panel";
+
+  const parameters: any[] = Array.isArray(reportData.parameters)
+    ? reportData.parameters
+    : [];
+
+  const clinicalFlags: string[] = Array.isArray(reportData.clinical_flags)
+    ? reportData.clinical_flags
+    : [];
+
+  const reportSummary =
+    reportData.summary ||
+    reportData.overview ||
+    (caseData.aiReportAnalysis && caseData.aiReportAnalysis.length > 0 ? caseData.aiReportAnalysis[0] : null);
+
+  const findings: string[] = Array.isArray(reportData.findings)
+    ? reportData.findings
+    : caseData.aiReportAnalysis && caseData.aiReportAnalysis.length > 1
+    ? caseData.aiReportAnalysis.slice(1)
+    : [];
+
+  const hasReport = Boolean(
+    reportUrl ||
+    (caseData.reports && caseData.reports.length > 0) ||
+    (typeof reportData === "object" && Object.keys(reportData).length > 0 && (parameters.length > 0 || reportData.test_name || reportData.summary))
+  );
+
+  const [isEditing, setIsEditing] = useState(false);
+  const [editPriority, setEditPriority] = useState<string>(
+    caseData.urgency || "Yellow"
+  );
+  const [editSummary, setEditSummary] = useState<string>(resolveSummary());
+  const [isSaving, setIsSaving] = useState(false);
+  const [saveSuccess, setSaveSuccess] = useState(false);
+
+  useEffect(() => {
+    setEditPriority(caseData.urgency || "Yellow");
+    setEditSummary(resolveSummary());
+  }, [
+    caseData.urgency,
+    caseData.symptomsData?.summary,
+    (caseData as any).symptoms_data?.summary,
+    caseData.chiefComplaint,
+  ]);
+
+  const handleSaveAssessment = async () => {
+    setIsSaving(true);
+    try {
+      const priorityClass =
+        editPriority === "Red"
+          ? "bg-rose-100 text-rose-800 border-rose-200"
+          : editPriority === "Amber" || editPriority === "Yellow"
+          ? "bg-amber-100 text-amber-800 border-amber-200"
+          : "bg-emerald-100 text-emerald-800 border-emerald-200";
+
+      const updatedSymptomsData = {
+        ...(caseData.symptomsData || {}),
+        summary: editSummary.trim(),
+      };
+
+      onUpdateCase?.({
+        urgency: editPriority,
+        urgencyClass: priorityClass,
+        symptomsData: updatedSymptomsData,
+      });
+
+      await updateLiveTriageAssessment(caseData.id, editPriority, editSummary.trim());
+
+      setSaveSuccess(true);
+      setTimeout(() => setSaveSuccess(false), 3000);
+      setIsEditing(false);
+    } catch (e) {
+      console.error("Failed to update triage assessment:", e);
+    } finally {
+      setIsSaving(false);
+    }
+  };
   return (
     <>
       {/* Patient Overview Card */}
@@ -42,19 +277,11 @@ export function CaseOverviewTab({
               Patient Overview
             </h2>
           </div>
-          <button
-            type="button"
-            onClick={() => alert("Nurse edit mode for patient record")}
-            className="px-2.5 py-1 text-xs font-semibold text-slate-600 hover:text-slate-900 border border-slate-200 hover:bg-slate-50 rounded-lg flex items-center gap-1 transition-colors cursor-pointer"
-          >
-            <Edit2 className="w-3 h-3" />
-            <span>Edit</span>
-          </button>
         </div>
 
-        <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-          {/* Left Specs */}
-          <div className="space-y-2 text-xs">
+        <div className="grid grid-cols-1 sm:grid-cols-2 gap-x-6 gap-y-2 text-xs">
+          {/* Column 1 Specs */}
+          <div className="space-y-2">
             <div className="flex justify-between py-1 border-b border-slate-100">
               <span className="text-slate-400">Name</span>
               <span className="font-semibold text-slate-800">
@@ -73,6 +300,20 @@ export function CaseOverviewTab({
                 {caseData.phone}
               </span>
             </div>
+            {caseData.scheduleTime && (
+              <div className="flex justify-between py-1 border-b border-slate-100">
+                <span className="text-emerald-700 font-semibold flex items-center gap-1">
+                  <Calendar className="w-3 h-3" /> Scheduled:
+                </span>
+                <span className="font-bold text-emerald-900">
+                  {new Date(caseData.scheduleTime).toLocaleString([], { dateStyle: "short", timeStyle: "short" })}
+                </span>
+              </div>
+            )}
+          </div>
+
+          {/* Column 2 Specs */}
+          <div className="space-y-2">
             <div className="flex justify-between py-1 border-b border-slate-100">
               <span className="text-slate-400">Location</span>
               <span className="font-semibold text-slate-800">
@@ -85,132 +326,250 @@ export function CaseOverviewTab({
                 {caseData.language}
               </span>
             </div>
-            <div className="flex justify-between py-1">
+            <div className="flex justify-between py-1 border-b border-slate-100">
+              <span className="text-slate-400">Consultation Mode</span>
+              <span className="font-semibold text-indigo-700">
+                {caseData.consultationMode === "online"
+                  ? "Online Teleconsult"
+                  : caseData.consultationMode || "In-Person Walk-in"}
+              </span>
+            </div>
+            <div className="flex justify-between py-1 border-b border-slate-100">
               <span className="text-slate-400">Consent</span>
               <span className="px-2 py-0.5 rounded-md text-[10px] font-bold bg-emerald-100 text-emerald-800">
                 {caseData.consent}
               </span>
             </div>
-            {caseData.scheduleTime && (
-              <div className="flex justify-between py-1 border-t border-slate-100 pt-1.5">
-                <span className="text-emerald-700 font-semibold flex items-center gap-1">
-                  <Calendar className="w-3 h-3" /> Scheduled:
+          </div>
+        </div>
+
+        {normalizedRevertedQuestions && normalizedRevertedQuestions.length > 0 && (
+          <div className="mt-3 text-amber-900 bg-amber-50/90 p-3.5 rounded-xl border border-amber-200 text-[11px] space-y-2">
+            <div className="flex items-center justify-between">
+              <span className="text-[11px] uppercase font-bold text-amber-900 flex items-center gap-1.5">
+                <HelpCircle className="w-3.5 h-3.5 text-amber-700" />
+                <span>Reverted Questions for Patient</span>
+              </span>
+              <span className="px-2 py-0.5 rounded-full text-[10px] font-bold bg-amber-200 text-amber-900">
+                {normalizedRevertedQuestions.length} Questions
+              </span>
+            </div>
+            <div className="space-y-1.5">
+              {normalizedRevertedQuestions.map((q: any, idx: number) => (
+                <div
+                  key={q.id || idx}
+                  className="bg-white p-2.5 rounded-lg border border-amber-200/90 text-xs shadow-2xs space-y-1"
+                >
+                  <div className="font-semibold text-slate-800 flex items-start gap-1.5">
+                    <span className="font-bold text-amber-800 shrink-0">Q{idx + 1}:</span>
+                    <span className="break-words">{q.question}</span>
+                  </div>
+                  {q.answer ? (
+                    <div className="text-emerald-700 font-bold text-[11px] flex items-center gap-1.5 bg-emerald-50/80 px-2 py-1 rounded border border-emerald-200/60 mt-1">
+                      <Check className="w-3.5 h-3.5 text-emerald-600 shrink-0" />
+                      <span>Answer: {q.answer}</span>
+                    </div>
+                  ) : (
+                    <div className="text-amber-700 italic text-[10px] flex items-center gap-1 bg-amber-100/50 px-2 py-0.5 rounded">
+                      <span>Awaiting patient reply...</span>
+                    </div>
+                  )}
+                </div>
+              ))}
+            </div>
+          </div>
+        )}
+      </div>
+
+      {/* Clinical Symptoms & Summary Card */}
+      <div className="bg-white rounded-2xl border border-slate-200 p-5 shadow-xs space-y-3.5">
+        <div className="flex items-center justify-between border-b border-slate-100 pb-2.5">
+          <div className="flex items-center gap-2 text-slate-900 text-sm font-bold">
+            <FileText className="w-4 h-4 text-teal-700" />
+            <span>Clinical Symptoms &amp; Summary</span>
+          </div>
+          <div className="flex items-center gap-2">
+            {!isEditing ? (
+              <button
+                type="button"
+                onClick={() => setIsEditing(true)}
+                className="px-2.5 py-1 text-xs font-semibold text-slate-700 hover:text-teal-900 bg-white hover:bg-teal-50 border border-slate-200 hover:border-teal-300 rounded-lg flex items-center gap-1.5 transition-all cursor-pointer shadow-2xs"
+              >
+                <Edit2 className="w-3 h-3 text-teal-600" />
+                <span>Edit Assessment</span>
+              </button>
+            ) : null}
+          </div>
+        </div>
+
+        {/* 1. Reported Symptoms Tags (Top of card) */}
+        {(caseData.symptomsData?.symptoms?.length || (caseData as any).symptoms_data?.symptoms?.length || caseData.aiInfo?.symptoms?.length) ? (
+          <div className="space-y-1.5 pt-0.5">
+            <span className="text-[11px] font-bold text-slate-500 uppercase tracking-wider block">
+              Reported Symptoms
+            </span>
+            <div className="flex flex-wrap gap-1.5">
+              {(caseData.symptomsData?.symptoms || (caseData as any).symptoms_data?.symptoms || caseData.aiInfo.symptoms).map((sym: string, i: number) => (
+                <span
+                  key={i}
+                  className="px-2.5 py-0.5 rounded-md text-xs font-semibold bg-slate-100 text-slate-800 border border-slate-200"
+                >
+                  {sym}
                 </span>
-                <span className="font-bold text-emerald-900">
-                  {new Date(caseData.scheduleTime).toLocaleString([], { dateStyle: "short", timeStyle: "short" })}
+              ))}
+            </div>
+          </div>
+        ) : null}
+
+        {isEditing ? (
+          <div className="p-4 bg-teal-50/40 rounded-xl border border-teal-200/80 space-y-3.5 animate-in fade-in">
+            {/* 1. Edit Triage Priority */}
+            <div className="space-y-1.5">
+              <label className="text-xs font-bold text-slate-800 block">
+                Triage Priority:
+              </label>
+              <div className="grid grid-cols-3 gap-2">
+                {[
+                  {
+                    id: "Red",
+                    label: "Red",
+                    sub: "Immediate / High",
+                    color: "border-rose-200 bg-white text-rose-800 hover:bg-rose-50",
+                    active: "border-rose-500 bg-rose-50 ring-2 ring-rose-300 text-rose-900 font-bold",
+                    dot: "bg-rose-500",
+                  },
+                  {
+                    id: "Amber",
+                    label: "Amber",
+                    sub: "Urgent / Medium",
+                    color: "border-amber-200 bg-white text-amber-800 hover:bg-amber-50",
+                    active: "border-amber-500 bg-amber-50 ring-2 ring-amber-300 text-amber-900 font-bold",
+                    dot: "bg-amber-500",
+                  },
+                  {
+                    id: "Green",
+                    label: "Green",
+                    sub: "Routine / Low",
+                    color: "border-emerald-200 bg-white text-emerald-800 hover:bg-emerald-50",
+                    active: "border-emerald-500 bg-emerald-50 ring-2 ring-emerald-300 text-emerald-900 font-bold",
+                    dot: "bg-emerald-500",
+                  },
+                ].map((opt) => (
+                  <button
+                    key={opt.id}
+                    type="button"
+                    onClick={() => setEditPriority(opt.id)}
+                    className={`p-2.5 rounded-xl border text-left transition-all cursor-pointer ${
+                      editPriority === opt.id ? opt.active : opt.color
+                    }`}
+                  >
+                    <div className="flex items-center gap-1.5">
+                      <span className={`w-2 h-2 rounded-full ${opt.dot}`} />
+                      <span className="text-xs font-bold">{opt.label}</span>
+                    </div>
+                    <span className="text-[10px] block opacity-75 mt-0.5">{opt.sub}</span>
+                  </button>
+                ))}
+              </div>
+            </div>
+
+            {/* 2. Edit Clinical Summary */}
+            <div className="space-y-1.5">
+              <label className="text-xs font-bold text-slate-800 block">
+                Clinical Summary:
+              </label>
+              <textarea
+                rows={3}
+                value={editSummary}
+                onChange={(e) => setEditSummary(e.target.value)}
+                placeholder="Enter updated clinical summary..."
+                className="w-full text-xs font-medium text-slate-800 bg-white border border-slate-300 rounded-xl p-3 focus:outline-none focus:ring-2 focus:ring-teal-500 focus:border-teal-500 leading-relaxed resize-y"
+              />
+            </div>
+
+            {/* Action buttons */}
+            <div className="flex items-center justify-end gap-2 pt-1 border-t border-teal-100">
+              <button
+                type="button"
+                onClick={() => {
+                  setEditPriority(caseData.urgency || "Yellow");
+                  setEditSummary(resolveSummary());
+                  setIsEditing(false);
+                }}
+                disabled={isSaving}
+                className="px-3 py-1.5 text-xs font-semibold text-slate-600 hover:text-slate-900 bg-white border border-slate-200 rounded-lg hover:bg-slate-50 transition-colors cursor-pointer"
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                onClick={handleSaveAssessment}
+                disabled={isSaving}
+                className="px-4 py-1.5 text-xs font-bold text-white bg-teal-800 hover:bg-teal-900 rounded-lg shadow-2xs flex items-center gap-1.5 transition-all cursor-pointer disabled:opacity-50"
+              >
+                {isSaving ? (
+                  <>
+                    <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                    <span>Saving...</span>
+                  </>
+                ) : (
+                  <>
+                    <Check className="w-3.5 h-3.5" />
+                    <span>Save Assessment</span>
+                  </>
+                )}
+              </button>
+            </div>
+          </div>
+        ) : (
+          <>
+            {/* Triage Priority Display */}
+            <div className="p-3 bg-slate-50 rounded-xl border border-slate-200/80 flex items-center justify-between flex-wrap gap-2">
+              <div className="flex items-center gap-2">
+                <span className="text-xs font-bold text-slate-600">Triage Priority:</span>
+                <span
+                  className={`px-3 py-0.5 rounded-full text-xs font-bold border flex items-center gap-1.5 ${
+                    caseData.urgency === "Red"
+                      ? "bg-rose-100 text-rose-800 border-rose-300"
+                      : caseData.urgency === "Amber" || caseData.urgency === "Yellow"
+                      ? "bg-amber-100 text-amber-800 border-amber-300"
+                      : "bg-emerald-100 text-emerald-800 border-emerald-300"
+                  }`}
+                >
+                  <span
+                    className={`w-2 h-2 rounded-full ${
+                      caseData.urgency === "Red"
+                        ? "bg-rose-500"
+                        : caseData.urgency === "Amber" || caseData.urgency === "Yellow"
+                        ? "bg-amber-500"
+                        : "bg-emerald-500"
+                    }`}
+                  />
+                  <span>{caseData.urgency || "Yellow"}</span>
+                  <span className="text-[10px] opacity-75 font-normal">
+                    ({caseData.urgency === "Red" ? "Immediate / High" : caseData.urgency === "Amber" || caseData.urgency === "Yellow" ? "Urgent / Medium" : "Routine / Low"})
+                  </span>
                 </span>
               </div>
-            )}
-          </div>
 
-          {/* Right Quick Notes Box */}
-          <div className="p-3.5 bg-slate-50 rounded-xl border border-slate-200/80 flex flex-col justify-between">
-            <div>
-              <span className="text-[10px] font-bold uppercase tracking-wider text-slate-500">
-                Quick Notes
-              </span>
-              <p className="text-xs text-slate-600 mt-1.5 leading-relaxed">
-                {caseData.quickNotes}
-              </p>
-              {caseData.revertedQuestions && caseData.revertedQuestions.length > 0 && (
-                <div className="mt-2.5 pt-2 border-t border-amber-200/60 text-amber-900 bg-amber-50/80 p-2.5 rounded-lg text-[11px] space-y-1.5">
-                  <strong className="block text-[10px] uppercase font-bold text-amber-800">
-                    Reverted Questions ({caseData.revertedQuestions.length}):
-                  </strong>
-                  <div className="space-y-1">
-                    {caseData.revertedQuestions.map((q, idx) => (
-                      <div key={idx} className="bg-white p-2 rounded-md border border-amber-200/80 text-xs">
-                        <div className="font-semibold text-slate-800">Q{idx + 1}: {q.question}</div>
-                        {q.answer ? (
-                          <div className="text-emerald-700 font-bold mt-1 text-[11px] flex items-center gap-1">
-                            <Check className="w-3 h-3 text-emerald-600" />
-                            <span>Answer: {q.answer}</span>
-                          </div>
-                        ) : (
-                          <div className="text-amber-700 italic mt-0.5 text-[10px]">
-                            Awaiting patient reply...
-                          </div>
-                        )}
-                      </div>
-                    ))}
-                  </div>
-                </div>
+              {saveSuccess && (
+                <span className="text-xs font-bold text-emerald-700 flex items-center gap-1 bg-emerald-50 px-2 py-0.5 rounded-md border border-emerald-200">
+                  <Check className="w-3 h-3 text-emerald-600" /> Saved successfully
+                </span>
               )}
             </div>
-            <div className="text-[10px] text-teal-700 font-medium pt-2">
-              Verified by triage reception
-            </div>
-          </div>
-        </div>
-      </div>
 
-      {/* Chief Complaint Card */}
-      <div className="bg-white rounded-2xl border border-slate-200 p-5 shadow-xs space-y-2.5">
-        <div className="flex items-center gap-2 text-slate-900 text-sm font-bold">
-          <FileText className="w-4 h-4 text-teal-700" />
-          <span>Chief Complaint</span>
-        </div>
-        <div className="p-3.5 bg-slate-50 rounded-xl border border-slate-200/90 text-xs font-medium text-slate-800 italic leading-relaxed">
-          &ldquo;{caseData.chiefComplaint}&rdquo;
-        </div>
-      </div>
-
-      {/* AI Extracted Key Information Card */}
-      <div className="bg-white rounded-2xl border border-slate-200 p-5 shadow-xs space-y-3">
-        <div className="flex items-center justify-between">
-          <div className="flex items-center gap-2 text-slate-900 text-sm font-bold">
-            <Sparkles className="w-4 h-4 text-teal-600" />
-            <span>AI Extracted Key Information</span>
-          </div>
-          <button
-            type="button"
-            onClick={() => setActiveTab("AI Summary")}
-            className="text-xs font-bold text-teal-700 hover:text-teal-800 flex items-center gap-1 cursor-pointer"
-          >
-            <span>View details</span>
-            <span>&rarr;</span>
-          </button>
-        </div>
-
-        <ul className="space-y-1.5 text-xs text-slate-700 pl-1">
-          <li className="flex items-start gap-2">
-            <span className="w-1.5 h-1.5 rounded-full bg-slate-400 mt-1.5" />
-            <div>
-              <strong className="text-slate-900 font-semibold">Symptoms:</strong>{" "}
-              {caseData.aiInfo.symptoms.join(", ")}
+            {/* Summary paragraph */}
+            <div className="p-3.5 bg-teal-50/50 rounded-xl border border-teal-100 text-xs font-medium text-slate-800 leading-relaxed whitespace-pre-wrap">
+              <span className="font-bold text-teal-950 block mb-1">Summary:</span>
+              {caseData.symptomsData?.summary ||
+                (caseData as any).symptoms_data?.summary ||
+                (caseData as any).symptoms_data?.clinical_summary ||
+                caseData.chiefComplaint ||
+                "No clinical summary recorded."}
             </div>
-          </li>
-          <li className="flex items-start gap-2">
-            <span className="w-1.5 h-1.5 rounded-full bg-slate-400 mt-1.5" />
-            <div>
-              <strong className="text-slate-900 font-semibold">Duration:</strong>{" "}
-              {caseData.aiInfo.duration}
-            </div>
-          </li>
-          <li className="flex items-start gap-2">
-            <span className="w-1.5 h-1.5 rounded-full bg-slate-400 mt-1.5" />
-            <div>
-              <strong className="text-slate-900 font-semibold">Severity:</strong>{" "}
-              {caseData.aiInfo.severity}
-            </div>
-          </li>
-          <li className="flex items-start gap-2">
-            <span className="w-1.5 h-1.5 rounded-full bg-slate-400 mt-1.5" />
-            <div>
-              <strong className="text-slate-900 font-semibold">Associated:</strong>{" "}
-              {caseData.aiInfo.associated}
-            </div>
-          </li>
-          <li className="flex items-start gap-2">
-            <span className="w-1.5 h-1.5 rounded-full bg-slate-400 mt-1.5" />
-            <div>
-              <strong className="text-slate-900 font-semibold">Red flags:</strong>{" "}
-              <span className="text-emerald-700 font-medium">
-                {caseData.aiInfo.redFlags}
-              </span>
-            </div>
-          </li>
-        </ul>
+          </>
+        )}
       </div>
 
       {/* Missing Details Warning Banner (Only show if missing details exist) */}
@@ -233,166 +592,229 @@ export function CaseOverviewTab({
         </div>
       )}
 
-      {/* Medical Reports & AI Analysis Side-by-Side Cards */}
-      <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-        {/* Reports Card */}
-        <div className="bg-white rounded-2xl border border-slate-200 p-5 shadow-xs space-y-3">
+      {/* Patient Raw Complaint & Adaptive Intake Q&A Card */}
+      <div className="bg-white rounded-2xl border border-slate-200 p-5 shadow-xs space-y-4">
+        <div className="flex items-center justify-between border-b border-slate-100 pb-2.5">
           <div className="flex items-center gap-2 text-slate-900 text-sm font-bold">
-            <FileText className="w-4 h-4 text-teal-700" />
-            <span>Medical Reports ({caseData.reports.length})</span>
+            <MessageSquare className="w-4 h-4 text-teal-700" />
+            <span>Raw Complaint &amp; Intake Questions</span>
+          </div>
+          <span className="text-[10px] font-bold text-teal-800 bg-teal-50 px-2.5 py-0.5 rounded-full border border-teal-200">
+            Patient Intake
+          </span>
+        </div>
+
+        {/* 1. Patient Raw Complaint */}
+        <div className="space-y-1.5">
+          <span className="text-[11px] font-bold text-slate-500 uppercase tracking-wider block">
+            Patient Raw Complaint
+          </span>
+          <div className="p-3.5 bg-slate-50 rounded-xl border border-slate-200/80 text-xs font-semibold text-slate-800 leading-relaxed italic">
+            &ldquo;{rawComplaint}&rdquo;
+          </div>
+        </div>
+
+        {/* 2. Questions & Answers */}
+        <div className="space-y-2 pt-1 border-t border-slate-100">
+          <div className="flex items-center justify-between">
+            <span className="text-[11px] font-bold text-slate-500 uppercase tracking-wider block">
+              Patient Questions &amp; Answers
+            </span>
+            <span className="text-[10px] font-semibold text-slate-400">
+              {rawQaList.length} response{rawQaList.length === 1 ? "" : "s"}
+            </span>
           </div>
 
-          {caseData.reports.length === 0 ? (
-            <div className="p-3.5 bg-slate-50 rounded-xl border border-dashed border-slate-200 flex items-center gap-2.5 text-slate-500">
-              <FileText className="w-4 h-4 text-slate-400 shrink-0" />
-              <div>
-                <div className="text-xs font-medium text-slate-600">No medical reports attached</div>
-                <div className="text-[10px] text-slate-400">Patient did not upload any external lab/diagnostic documents</div>
-              </div>
-            </div>
-          ) : (
+          {rawQaList.length > 0 ? (
             <div className="space-y-2">
-              {caseData.reports.map((repName, idx) => (
+              {rawQaList.map((item, idx) => (
                 <div
                   key={idx}
-                  className="p-3 bg-slate-50 rounded-xl border border-slate-200 flex items-center justify-between gap-2"
+                  className="p-3 bg-slate-50/70 rounded-xl border border-slate-200/80 space-y-1 hover:border-teal-200 hover:bg-teal-50/20 transition-colors"
                 >
-                  <div className="flex items-center gap-2.5 min-w-0">
-                    <div className="w-8 h-8 rounded-lg bg-teal-100 text-teal-800 flex items-center justify-center shrink-0">
-                      <FileText className="w-4 h-4" />
-                    </div>
-                    <div className="min-w-0">
-                      <div className="text-xs font-bold text-slate-800 truncate" title={repName}>
-                        {repName}
-                      </div>
-                      <div className="text-[10px] text-slate-400">
-                        {caseData.submittedTime ? `Submitted ${caseData.submittedTime}` : "Uploaded with intake"}
-                      </div>
-                    </div>
+                  <div className="text-xs font-bold text-slate-900 flex items-start gap-1.5">
+                    <span className="text-teal-700 font-extrabold shrink-0">Q:</span>
+                    <span>{item.question}</span>
                   </div>
-                  {caseData.uploadedReportUrl ? (
-                    <a
-                      href={caseData.uploadedReportUrl}
-                      target="_blank"
-                      rel="noopener noreferrer"
-                      className="px-2.5 py-1 bg-white border border-slate-200 hover:bg-slate-100 text-slate-700 font-bold text-xs rounded-lg shadow-2xs transition-colors shrink-0"
-                    >
-                      View
-                    </a>
-                  ) : (
-                    <button
-                      type="button"
-                      onClick={() => setReportModalOpen(true)}
-                      className="px-2.5 py-1 bg-white border border-slate-200 hover:bg-slate-100 text-slate-700 font-bold text-xs rounded-lg shadow-2xs transition-colors cursor-pointer shrink-0"
-                    >
-                      View
-                    </button>
-                  )}
+                  <div className="text-xs font-medium text-slate-700 pl-4 flex items-start gap-1.5">
+                    <span className="text-slate-400 font-bold shrink-0">A:</span>
+                    <span className="text-slate-800 font-semibold">{item.answer}</span>
+                  </div>
                 </div>
               ))}
             </div>
-          )}
-        </div>
-
-        {/* AI Report Analysis Card */}
-        <div className="bg-white rounded-2xl border border-slate-200 p-5 shadow-xs space-y-2.5">
-          <div className="flex items-center justify-between">
-            <div className="flex items-center gap-1.5 text-slate-900 text-sm font-bold">
-              <CheckCircle2 className="w-4 h-4 text-emerald-600" />
-              <span>AI Report Analysis</span>
-            </div>
-          </div>
-
-          {caseData.aiReportAnalysis && caseData.aiReportAnalysis.length > 0 ? (
-            <>
-              <ul className="space-y-1 text-xs text-slate-700">
-                {caseData.aiReportAnalysis.map((item, i) => (
-                  <li key={i} className="flex items-start gap-1.5">
-                    <span className="w-1.5 h-1.5 rounded-full bg-emerald-500 mt-1.5 shrink-0" />
-                    <span className="text-[11px] leading-tight">{item}</span>
-                  </li>
-                ))}
-              </ul>
-
-              <button
-                type="button"
-                onClick={() => setActiveTab("Medical Reports")}
-                className="text-[11px] font-bold text-teal-700 hover:text-teal-800 flex items-center gap-1 cursor-pointer pt-1"
-              >
-                <span>View full analysis</span>
-                <span>&rarr;</span>
-              </button>
-            </>
           ) : (
-            <div className="p-3.5 bg-slate-50 rounded-xl border border-dashed border-slate-200 text-xs text-slate-500">
-              <div className="font-medium text-slate-600">No lab reports attached</div>
-              <div className="text-[10px] text-slate-400 mt-0.5">Automated OCR and lab panel parsing will activate when documents are uploaded.</div>
+            <div className="p-4 bg-slate-50 rounded-xl border border-dashed border-slate-200 text-xs text-slate-500 text-center">
+              No adaptive intake questions recorded for this patient.
             </div>
           )}
         </div>
       </div>
 
-      {/* Current Triage Status & Assigned Facility Cards */}
-      <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-        {/* Triage Status */}
-        <div className="bg-white rounded-2xl border border-slate-200 p-5 shadow-xs space-y-2">
-          <div className="flex items-center gap-2 text-xs font-bold text-slate-900">
-            <HeartPulse className="w-4 h-4 text-rose-600" />
-            <span>Current Triage Status (AI Suggestion)</span>
+      {/* Patient Uploaded Medical Report & Report Data Card */}
+      <div className="bg-white rounded-2xl border border-slate-200 p-5 shadow-xs space-y-4">
+        <div className="flex items-center justify-between border-b border-slate-100 pb-2.5">
+          <div className="flex items-center gap-2 text-slate-900 text-sm font-bold">
+            <FileText className="w-4 h-4 text-teal-700" />
+            <span>Uploaded Medical Report &amp; Lab Data</span>
           </div>
-          <div>
-            {(() => {
-              const p = (caseData.aiSuggestion?.priority || caseData.urgency || "Yellow").toLowerCase();
-              const isRed = p.includes("red") || p.includes("immediate");
-              const isGreen = p.includes("green") || p.includes("less urgent") || p.includes("routine");
-              const badgeClass = isRed
-                ? "bg-rose-100 text-rose-900 border-rose-300"
-                : isGreen
-                ? "bg-emerald-100 text-emerald-900 border-emerald-300"
-                : "bg-amber-100 text-amber-900 border-amber-300";
-              const Icon = isRed ? ShieldAlert : isGreen ? CheckCircle2 : AlertTriangle;
-              const iconColor = isRed ? "text-rose-700" : isGreen ? "text-emerald-700" : "text-amber-700";
+          {hasReport ? (
+            <span className="text-[10px] font-bold text-teal-800 bg-teal-50 px-2.5 py-0.5 rounded-full border border-teal-200">
+              Attached Document
+            </span>
+          ) : (
+            <span className="text-[10px] font-bold text-slate-500 bg-slate-100 px-2.5 py-0.5 rounded-full border border-slate-200">
+              No Document
+            </span>
+          )}
+        </div>
 
-              return (
-                <span className={`inline-flex items-center gap-1.5 px-3 py-1 rounded-xl text-xs font-extrabold border ${badgeClass}`}>
-                  <Icon className={`w-3.5 h-3.5 ${iconColor}`} />
-                  <span>{caseData.aiSuggestion?.priority || caseData.urgency || "Yellow"}</span>
+        {hasReport ? (
+          <div className="space-y-3.5">
+            {/* Document Header & Open Link */}
+            <div className="flex items-center justify-between p-3.5 bg-slate-50 rounded-xl border border-slate-200/80 gap-3 flex-wrap">
+              <div className="flex items-center gap-2.5 min-w-0">
+                <div className="w-9 h-9 rounded-xl bg-teal-100 text-teal-800 flex items-center justify-center shrink-0">
+                  <FileText className="w-5 h-5" />
+                </div>
+                <div className="min-w-0">
+                  <div className="text-xs font-bold text-slate-900 truncate" title={reportName}>
+                    {reportName}
+                  </div>
+                  <div className="text-[11px] text-slate-500 flex items-center gap-1.5 flex-wrap">
+                    <span className="font-semibold text-teal-900">{testName}</span>
+                    {reportData.report_date && <span>• Date: {reportData.report_date}</span>}
+                  </div>
+                </div>
+              </div>
+
+              {reportUrl ? (
+                <a
+                  href={reportUrl}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="inline-flex items-center gap-1.5 px-3 py-1.5 bg-white hover:bg-teal-50 border border-slate-200 hover:border-teal-300 text-teal-900 font-bold text-xs rounded-lg shadow-2xs transition-colors cursor-pointer shrink-0"
+                >
+                  <ExternalLink className="w-3.5 h-3.5 text-teal-700" />
+                  <span>View Original Document</span>
+                </a>
+              ) : (
+                <button
+                  type="button"
+                  onClick={() => setReportModalOpen(true)}
+                  className="inline-flex items-center gap-1.5 px-3 py-1.5 bg-white hover:bg-teal-50 border border-slate-200 hover:border-teal-300 text-teal-900 font-bold text-xs rounded-lg shadow-2xs transition-colors cursor-pointer shrink-0"
+                >
+                  <FileText className="w-3.5 h-3.5 text-teal-700" />
+                  <span>View Report</span>
+                </button>
+              )}
+            </div>
+
+            {/* AI Synthesized Report Summary if available */}
+            {reportSummary && (
+              <div className="p-3.5 bg-teal-50/50 rounded-xl border border-teal-100 space-y-1">
+                <span className="text-[11px] font-bold text-teal-950 uppercase tracking-wider block">
+                  Report Synthesis &amp; Overview
                 </span>
-              );
-            })()}
-          </div>
-          <p className="text-xs text-slate-600 leading-relaxed">
-            {caseData.aiSuggestion?.reason || "Clinical triage assessment recommended."}
-          </p>
-        </div>
-
-        {/* Assigned Facility */}
-        <div className="bg-white rounded-2xl border border-slate-200 p-5 shadow-xs space-y-2 flex flex-col justify-between">
-          <div>
-            <div className="flex items-center gap-2 text-xs font-bold text-slate-900">
-              <Building2 className="w-4 h-4 text-teal-700" />
-              <span>Assigned Facility</span>
-            </div>
-            <div className="mt-2">
-              <div className="text-sm font-bold text-slate-900">
-                {caseData.facility}
+                <p className="text-xs text-slate-800 leading-relaxed font-medium whitespace-pre-wrap">
+                  {reportSummary}
+                </p>
               </div>
-              <div className="text-xs text-slate-500">
-                {caseData.facilityLocation}
+            )}
+
+            {/* Identified Clinical Flags / Alerts */}
+            {clinicalFlags.length > 0 && (
+              <div className="p-3.5 bg-amber-50/80 border border-amber-200 rounded-xl space-y-1.5">
+                <div className="flex items-center gap-1.5 text-xs font-bold text-amber-900">
+                  <AlertTriangle className="w-4 h-4 text-amber-600 shrink-0" />
+                  <span>Identified Clinical Flags / Abnormalities:</span>
+                </div>
+                <ul className="text-xs text-amber-800 list-disc list-inside space-y-0.5 pl-1 font-medium">
+                  {clinicalFlags.map((flag, fIdx) => (
+                    <li key={fIdx}>{flag}</li>
+                  ))}
+                </ul>
               </div>
+            )}
+
+            {/* Structured Parameters Table */}
+            {parameters.length > 0 && (
+              <div className="space-y-1.5 pt-1">
+                <span className="text-[11px] font-bold text-slate-500 uppercase tracking-wider block">
+                  Extracted Lab Parameters ({parameters.length})
+                </span>
+                <div className="overflow-x-auto rounded-xl border border-slate-200">
+                  <table className="w-full text-left text-xs">
+                    <thead className="bg-slate-50 text-slate-600 font-bold border-b border-slate-200">
+                      <tr>
+                        <th className="py-2.5 px-3">Test Parameter</th>
+                        <th className="py-2.5 px-3">Result</th>
+                        <th className="py-2.5 px-3">Reference Range</th>
+                        <th className="py-2.5 px-3 text-right">Status</th>
+                      </tr>
+                    </thead>
+                    <tbody className="divide-y divide-slate-100">
+                      {parameters.map((p: any, idx: number) => {
+                        const statusUpper = String(p.status || "").toUpperCase();
+                        const isHigh = statusUpper === "HIGH" || statusUpper === "CRITICAL";
+                        const isLow = statusUpper === "LOW";
+                        const badgeColor = isHigh
+                          ? "bg-rose-100 text-rose-800 border-rose-200"
+                          : isLow
+                          ? "bg-amber-100 text-amber-800 border-amber-200"
+                          : "bg-emerald-100 text-emerald-800 border-emerald-200";
+
+                        return (
+                          <tr key={idx} className="hover:bg-slate-50/50 transition-colors">
+                            <td className="py-2.5 px-3 font-semibold text-slate-900">
+                              {p.parameter || p.name || "-"}
+                            </td>
+                            <td className="py-2.5 px-3 font-bold text-slate-900">
+                              {p.value || "-"} {p.unit || ""}
+                            </td>
+                            <td className="py-2.5 px-3 text-slate-500">
+                              {p.reference_range || "-"}
+                            </td>
+                            <td className="py-2.5 px-3 text-right">
+                              <span className={`inline-block px-2 py-0.5 rounded text-[10px] font-bold border ${badgeColor}`}>
+                                {statusUpper || "NORMAL"}
+                              </span>
+                            </td>
+                          </tr>
+                        );
+                      })}
+                    </tbody>
+                  </table>
+                </div>
+              </div>
+            )}
+
+            {/* Extracted Diagnostic Findings */}
+            {findings.length > 0 && (
+              <div className="space-y-1.5 pt-1 border-t border-slate-100">
+                <span className="text-[11px] font-bold text-slate-500 uppercase tracking-wider block">
+                  Diagnostic Findings
+                </span>
+                <ul className="space-y-1.5 text-xs text-slate-700">
+                  {findings.map((f, fIdx) => (
+                    <li key={fIdx} className="flex items-start gap-1.5 bg-slate-50 p-2.5 rounded-lg border border-slate-200/80">
+                      <span className="w-1.5 h-1.5 rounded-full bg-teal-600 mt-1.5 shrink-0" />
+                      <span className="font-medium text-slate-800">{f}</span>
+                    </li>
+                  ))}
+                </ul>
+              </div>
+            )}
+          </div>
+        ) : (
+          <div className="p-6 text-center bg-slate-50 rounded-xl border border-dashed border-slate-200 space-y-1.5">
+            <FileText className="w-8 h-8 text-slate-300 mx-auto" />
+            <div className="text-xs font-bold text-slate-700">No medical reports uploaded</div>
+            <div className="text-[11px] text-slate-400">
+              The patient did not upload any external lab documents or diagnostic scans during intake.
             </div>
           </div>
-
-          <div className="pt-2 flex justify-end">
-            <button
-              type="button"
-              onClick={() => alert(`Assigned Facility: ${caseData.facility} (${caseData.facilityLocation})`)}
-              className="px-3 py-1 bg-slate-100 hover:bg-slate-200 text-slate-700 font-bold text-xs rounded-lg transition-colors cursor-pointer"
-            >
-              Change
-            </button>
-          </div>
-        </div>
+        )}
       </div>
     </>
   );

@@ -12,6 +12,8 @@ interface RemindersVitalsCardProps {
   setPulse: (v: string) => void;
   temperature: string;
   setTemperature: (v: string) => void;
+  spo2: string;
+  setSpo2: (v: string) => void;
   vitalsSaved: boolean;
   onSaveVitals: (e: React.FormEvent) => void;
 }
@@ -25,6 +27,8 @@ export function RemindersVitalsCard({
   setPulse,
   temperature,
   setTemperature,
+  spo2,
+  setSpo2,
   vitalsSaved,
   onSaveVitals,
 }: RemindersVitalsCardProps) {
@@ -50,7 +54,7 @@ export function RemindersVitalsCard({
         )}
       </div>
 
-      <form onSubmit={onSaveVitals} className="grid grid-cols-2 sm:grid-cols-5 gap-3 items-end">
+      <form onSubmit={onSaveVitals} className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-3 items-end">
         <div>
           <label className="text-[10px] font-bold text-slate-500 uppercase block mb-1">
             Systolic BP (mmHg)
@@ -59,6 +63,7 @@ export function RemindersVitalsCard({
             type="number"
             value={systolic}
             onChange={(e) => setSystolic(e.target.value)}
+            placeholder="120"
             className="w-full text-sm font-bold px-3 py-2 bg-slate-50 rounded-xl border border-slate-200 focus:bg-white focus:ring-2 focus:ring-teal-600 focus:outline-none"
           />
         </div>
@@ -71,6 +76,7 @@ export function RemindersVitalsCard({
             type="number"
             value={diastolic}
             onChange={(e) => setDiastolic(e.target.value)}
+            placeholder="80"
             className="w-full text-sm font-bold px-3 py-2 bg-slate-50 rounded-xl border border-slate-200 focus:bg-white focus:ring-2 focus:ring-teal-600 focus:outline-none"
           />
         </div>
@@ -83,6 +89,7 @@ export function RemindersVitalsCard({
             type="number"
             value={pulse}
             onChange={(e) => setPulse(e.target.value)}
+            placeholder="72"
             className="w-full text-sm font-bold px-3 py-2 bg-slate-50 rounded-xl border border-slate-200 focus:bg-white focus:ring-2 focus:ring-teal-600 focus:outline-none"
           />
         </div>
@@ -95,6 +102,20 @@ export function RemindersVitalsCard({
             type="text"
             value={temperature}
             onChange={(e) => setTemperature(e.target.value)}
+            placeholder="98.4"
+            className="w-full text-sm font-bold px-3 py-2 bg-slate-50 rounded-xl border border-slate-200 focus:bg-white focus:ring-2 focus:ring-teal-600 focus:outline-none"
+          />
+        </div>
+
+        <div>
+          <label className="text-[10px] font-bold text-slate-500 uppercase block mb-1">
+            SpO2 (%)
+          </label>
+          <input
+            type="number"
+            value={spo2}
+            onChange={(e) => setSpo2(e.target.value)}
+            placeholder="98"
             className="w-full text-sm font-bold px-3 py-2 bg-slate-50 rounded-xl border border-slate-200 focus:bg-white focus:ring-2 focus:ring-teal-600 focus:outline-none"
           />
         </div>

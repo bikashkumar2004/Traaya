@@ -41,6 +41,11 @@ export interface StoredReport {
   file_size?: string;
   lab_name?: string;
   test_date?: string;
+  patient_name?: string;
+  patient_dob?: string;
+  doctor_name?: string;
+  sections?: Array<{ title: string; items: string[] }>;
+  raw_model_output?: string;
   patient_summary?: string;
   summary_details?: SummaryDetails;
   ocr_extracted_metrics?: any;

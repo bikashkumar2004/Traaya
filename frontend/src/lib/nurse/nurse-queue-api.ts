@@ -92,11 +92,39 @@ export async function fetchLiveNurseQueue(options?: {
     if (res.ok) {
       const data = await res.json();
       if (data.status === "success" && Array.isArray(data.cases)) {
-        let filteredCases = data.cases;
+        let mappedCases = data.cases.map((c: any) => {
+          const sdata =
+            typeof c.symptoms_data === "object" && c.symptoms_data !== null
+              ? c.symptoms_data
+              : typeof c.symptomsData === "object" && c.symptomsData !== null
+              ? c.symptomsData
+              : {};
+          const syms = sdata.symptoms || c.symptomsData?.symptoms || c.aiInfo?.symptoms || [];
+          const summ =
+            sdata.summary ||
+            c.symptomsData?.summary ||
+            sdata.clinical_summary ||
+            sdata.symptoms_summary ||
+            sdata.patient_summary ||
+            sdata.raw_complaint ||
+            c.chiefComplaint ||
+            (syms.length ? syms.join(", ") : "");
+          return {
+            ...c,
+            symptomsData: {
+              symptoms: syms,
+              raw_complaint: sdata.raw_complaint || c.symptomsData?.raw_complaint || c.chiefComplaint,
+              summary: summ,
+              questions_answers: sdata.questions_answers || c.symptomsData?.questions_answers || {},
+              raw_qa: sdata.raw_qa || c.symptomsData?.raw_qa || [],
+            },
+            symptoms_data: sdata,
+          };
+        });
         if (targetFacilityId || targetFacilityName || effectiveDoctorId) {
-          filteredCases = filterCasesByFacility(data.cases, targetFacilityId, targetFacilityName, effectiveDoctorId);
+          mappedCases = filterCasesByFacility(mappedCases, targetFacilityId, targetFacilityName, effectiveDoctorId);
         }
-        return { cases: filteredCases, source: "api" };
+        return { cases: mappedCases, source: "api" };
       }
     }
   } catch (err) {
@@ -184,13 +212,30 @@ export async function submitPatientAnswers(
         .single();
 
       if (ticket) {
-        const existing: any[] = ticket.reverted_questions || [];
-        const ansMap = new Map(answers.map((a) => [a.id, a.answer]));
-        const updated = existing.map((q) => {
-          if (ansMap.has(q.id)) {
-            return { ...q, answer: ansMap.get(q.id), answered_at: new Date().toISOString() };
+        let existing: any = ticket.reverted_questions || [];
+        if (typeof existing === "string") {
+          try {
+            existing = JSON.parse(existing);
+          } catch {
+            existing = existing.split("\n").filter(Boolean).map((line: string, idx: number) => ({ id: `q_${idx + 1}`, question: line.trim(), answer: "" }));
           }
-          return q;
+        }
+        if (!Array.isArray(existing)) {
+          existing = typeof existing === "object" && existing !== null ? [existing] : [];
+        }
+
+        const ansMap = new Map(answers.map((a) => [String(a.id), a.answer]));
+        const updated = existing.map((q: any, idx: number) => {
+          const qid = String(q.id || `q_${idx + 1}`);
+          if (ansMap.has(qid)) {
+            return {
+              ...q,
+              id: qid,
+              answer: ansMap.get(qid),
+              answered_at: new Date().toISOString()
+            };
+          }
+          return { ...q, id: qid };
         });
 
         await supabase

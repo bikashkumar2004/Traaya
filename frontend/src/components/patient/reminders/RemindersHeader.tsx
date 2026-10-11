@@ -16,7 +16,7 @@ export function RemindersHeader({
     <div className="flex flex-col md:flex-row md:items-center justify-between gap-4">
       <div>
         <h1 className="text-2xl sm:text-3xl font-black text-slate-900 tracking-tight">
-          Reminders &amp; Care Follow-ups
+          My Care
         </h1>
         <p className="text-xs sm:text-sm text-slate-600 mt-1 max-w-2xl leading-relaxed">
           Your personalized schedule for daily medicines, clinical consultations, ASHA community visits, and health monitoring logs.

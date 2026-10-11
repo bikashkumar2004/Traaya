@@ -16,12 +16,14 @@ export const AdminHeader: React.FC<AdminHeaderProps> = ({
     <div className="bg-slate-800/90 border border-slate-700/80 rounded-2xl p-6 shadow-xl backdrop-blur-md flex flex-col md:flex-row md:items-center justify-between gap-4">
       <div className="space-y-1">
         <div className="flex items-center gap-2.5">
-          <div className="w-10 h-10 rounded-xl bg-teal-500/20 text-teal-400 flex items-center justify-center border border-teal-500/40">
-            <ShieldAlert className="w-6 h-6" />
-          </div>
+          <img
+            src="/traaya-logo.png"
+            alt="TRAAYA Logo"
+            className="h-10 w-auto object-contain shrink-0"
+          />
           <div>
             <h1 className="text-xl sm:text-2xl font-black text-white tracking-tight">
-              TriageAssist Admin Test Console
+              TRAAYA Admin Test Console
             </h1>
             <p className="text-xs text-slate-400">
               Universal Multi-Role Registration &amp; QA Data Provisioning Workbench

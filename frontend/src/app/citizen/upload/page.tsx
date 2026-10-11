@@ -135,7 +135,7 @@ export default function PatientUploadPage() {
       {/* Header Banner */}
       <div>
         <h1 className="text-2xl sm:text-3xl font-black text-slate-900 tracking-tight">
-          Upload Reports &amp; View Simplified Summary
+          Add Medical Record
         </h1>
         <p className="text-xs sm:text-sm text-slate-600 mt-1 max-w-3xl leading-relaxed">
           Upload your blood tests, pathology slips, or diagnostic reports. Our AI reads the medical jargon and explains your results in clear, everyday words so you understand your health.

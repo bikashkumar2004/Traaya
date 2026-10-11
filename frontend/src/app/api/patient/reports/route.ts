@@ -209,78 +209,113 @@ export async function POST(req: NextRequest) {
       fileUrl = `${supabaseUrl}/storage/v1/object/public/medical-reports/${storageKey}`;
     }
 
-    // 2. Intelligent Parameter Extraction & Patient-Friendly Summary Details
-    const searchString = `${fileNameHint} ${reportTypeHint}`.toLowerCase();
-    let testName = "Complete Blood Count (CBC)";
-    let labName = "District Hospital Pathology Lab";
+    // 2. Invoke FastAPI OCR Model endpoint for dynamic medical document extraction
+    let testName = reportTypeHint || "Medical Report";
+    let labName = "Medical Diagnostics";
     let reportDate = new Date().toISOString().split("T")[0];
     let parameters: any[] = [];
     let clinicalFlags: string[] = [];
+    let patientSummary = "";
+    let reportSummaryJson: any = null;
 
-    if (searchString.includes("lipid") || searchString.includes("cholesterol") || searchString.includes("triglyceride")) {
-      testName = "Lipid Profile & Heart Biomarkers";
-      labName = "Primary Health Centre - Clinical Lab";
-      parameters = [
-        { name: "Total Cholesterol", value: "228", unit: "mg/dL", reference_range: "< 200", status: "HIGH", alert_level: "Priority" },
-        { name: "Triglycerides", value: "185", unit: "mg/dL", reference_range: "< 150", status: "HIGH", alert_level: "Priority" },
-        { name: "HDL Cholesterol (Good)", value: "38", unit: "mg/dL", reference_range: "> 40", status: "LOW", alert_level: "Priority" },
-        { name: "LDL Cholesterol (Bad)", value: "153", unit: "mg/dL", reference_range: "< 100", status: "HIGH", alert_level: "Priority" },
-      ];
-      clinicalFlags = ["Hypercholesterolemia with low HDL suggesting cardiovascular attention required."];
-    } else if (searchString.includes("lft") || searchString.includes("liver") || searchString.includes("bilirubin")) {
-      testName = "Liver Function Test (LFT Panel)";
-      labName = "District Diagnostic Center";
-      parameters = [
-        { name: "Total Bilirubin", value: "2.8", unit: "mg/dL", reference_range: "0.2 - 1.2", status: "HIGH", alert_level: "Urgent" },
-        { name: "Direct Bilirubin", value: "0.9", unit: "mg/dL", reference_range: "0.0 - 0.3", status: "HIGH", alert_level: "Priority" },
-        { name: "SGPT (ALT)", value: "128", unit: "U/L", reference_range: "7 - 56", status: "HIGH", alert_level: "Priority" },
-        { name: "SGOT (AST)", value: "96", unit: "U/L", reference_range: "10 - 40", status: "HIGH", alert_level: "Priority" },
-        { name: "Serum Albumin", value: "4.1", unit: "g/dL", reference_range: "3.5 - 5.0", status: "NORMAL", alert_level: "Routine" },
-      ];
-      clinicalFlags = ["Elevated liver enzymes (SGPT/SGOT) indicating hepatic inflammation."];
-    } else if (searchString.includes("sugar") || searchString.includes("glucose") || searchString.includes("diabetes") || searchString.includes("hba1c")) {
-      testName = "Glycemic Assessment & Diabetes Panel";
-      labName = "Community Health Care Pathology";
-      parameters = [
-        { name: "Random Blood Sugar (RBS)", value: "242", unit: "mg/dL", reference_range: "70 - 140", status: "HIGH", alert_level: "Urgent" },
-        { name: "HbA1c (3-Month Avg)", value: "8.6", unit: "%", reference_range: "< 5.7", status: "HIGH", alert_level: "Urgent" },
-        { name: "Fasting Glucose", value: "158", unit: "mg/dL", reference_range: "70 - 99", status: "HIGH", alert_level: "Priority" },
-      ];
-      clinicalFlags = ["Marked hyperglycemia requiring medical review and glycemic management."];
-    } else {
-      testName = "Complete Blood Count (CBC)";
-      labName = "District General Hospital Pathology";
-      parameters = [
-        { name: "Hemoglobin", value: "11.2", unit: "g/dL", reference_range: "12.0 - 15.5", status: "LOW", alert_level: "Priority" },
-        { name: "Total Leukocyte Count (WBC)", value: "11,600", unit: "/µL", reference_range: "4,000 - 11,000", status: "HIGH", alert_level: "Priority" },
-        { name: "Platelet Count", value: "245,000", unit: "/µL", reference_range: "150,000 - 450,000", status: "NORMAL", alert_level: "Routine" },
-        { name: "Packed Cell Volume (PCV)", value: "35.2", unit: "%", reference_range: "36.0 - 46.0", status: "LOW", alert_level: "Routine" },
-        { name: "Red Blood Cells (RBC)", value: "4.2", unit: "million/µL", reference_range: "3.8 - 5.2", status: "NORMAL", alert_level: "Routine" },
-      ];
-      clinicalFlags = ["Mild microcytic anemia with reactive mild leukocytosis."];
+    try {
+      const backendFormData = new FormData();
+      if (file) {
+        backendFormData.append("file", file, file.name);
+      }
+      backendFormData.append("file_name", fileNameHint);
+      backendFormData.append("report_type", reportTypeHint);
+      backendFormData.append("patient_id", patientId);
+
+      const ocrResp = await fetch("http://localhost:8000/api/ocr/scan-qwen-vl", {
+        method: "POST",
+        body: backendFormData,
+      });
+
+      if (ocrResp.ok) {
+        const ocrJson = await ocrResp.json();
+        const ocrData = ocrJson?.data;
+        if (ocrData) {
+          testName = ocrData.test_name || testName;
+          labName = ocrData.lab_name || labName;
+          reportDate = ocrData.report_date || reportDate;
+          parameters = ocrData.parameters || [];
+          clinicalFlags = ocrData.clinical_flags || ocrData.medical_issues || [];
+          patientSummary = ocrData.patient_summary || ocrData.ai_summary || "";
+
+          reportSummaryJson = {
+            overview: patientSummary,
+            health_status: ocrData.summary_details?.health_status || "Normal",
+            urgency: ocrData.summary_details?.urgency || "Routine Checkup",
+            file_name: fileNameHint,
+            file_size: fileSizeStr,
+            lab_name: labName,
+            test_date: reportDate,
+            patient_name: ocrData.patient_name,
+            patient_dob: ocrData.patient_dob,
+            doctor_name: ocrData.doctor_name,
+            parameters: parameters,
+            sections: ocrData.sections || [],
+            medical_issues: ocrData.medical_issues || [],
+            treatments: ocrData.treatments || [],
+            lifestyle_advice: ocrData.lifestyle_advice || [],
+            clinical_flags: clinicalFlags,
+            raw_model_output: ocrData.raw_model_output,
+            abnormal_findings: ocrData.summary_details?.abnormal_findings || [],
+            normal_findings: ocrData.summary_details?.normal_findings || [],
+          };
+
+          // If backend already persisted to database, use that record_id directly
+          if (ocrJson?.database?.saved && ocrJson?.database?.record_id) {
+            return NextResponse.json({
+              success: true,
+              data: {
+                id: ocrJson.database.record_id,
+                patient_id: patientId,
+                report_type: testName,
+                file_url: ocrJson.storage?.file_url || fileUrl,
+                file_type: fileType,
+                report_summary: reportSummaryJson,
+                created_at: new Date().toISOString(),
+              },
+              storage: {
+                saved: true,
+                bucket: "medical-reports",
+                file_url: ocrJson.storage?.file_url || fileUrl,
+                storage_key: storageKey,
+              },
+              database: {
+                saved: true,
+                table: "uploaded_reports",
+                record_id: ocrJson.database.record_id,
+              },
+            });
+          }
+        }
+      }
+    } catch (backendErr) {
+      console.warn("[Backend OCR Scanner Notice]", backendErr);
     }
 
-    // Generate patient-friendly summary details
-    const { patientSummary, summaryDetails } = generatePatientSummary(testName, parameters, clinicalFlags);
+    if (!reportSummaryJson) {
+      reportSummaryJson = {
+        overview: `${testName} uploaded successfully.`,
+        health_status: "Normal",
+        urgency: "Routine Checkup",
+        file_name: fileNameHint,
+        file_size: fileSizeStr,
+        lab_name: labName,
+        test_date: reportDate,
+        parameters: [],
+        sections: [],
+        medical_issues: [],
+        treatments: [],
+        lifestyle_advice: [],
+        clinical_flags: [],
+      };
+    }
 
-    // Consolidated report summary in JSON
-    const reportSummaryJson = {
-      overview: patientSummary,
-      health_status: summaryDetails.health_status,
-      urgency: summaryDetails.urgency,
-      file_name: fileNameHint,
-      file_size: fileSizeStr,
-      lab_name: labName,
-      test_date: reportDate,
-      abnormal_findings: summaryDetails.abnormal_findings,
-      normal_findings: summaryDetails.normal_findings,
-      what_to_ask_doctor: summaryDetails.what_to_ask_doctor,
-      lifestyle_tips: summaryDetails.lifestyle_tips,
-      parameters,
-      clinical_flags: clinicalFlags,
-    };
-
-    // 3. Persist into Supabase Database 'uploaded_reports' table
+    // 3. Fallback: Persist into Supabase Database 'uploaded_reports' only if not already saved by backend
     const recordId = crypto.randomUUID();
     const insertPayload = {
       id: recordId,

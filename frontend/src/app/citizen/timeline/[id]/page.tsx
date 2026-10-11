@@ -33,6 +33,7 @@ import {
   Pill,
   CalendarCheck,
   UserCheck,
+  Loader2,
 } from "lucide-react";
 import { useAuth } from "@/lib/auth-context";
 import { supabase } from "@/lib/supabase";
@@ -81,8 +82,13 @@ interface TriageTicket {
   chief_complaint?: string;
   symptoms?: Array<any>;
   symptoms_data?: {
+    raw_complaint?: string;
+    complaint?: string;
     chief_complaint?: string;
+    summary?: string;
     symptoms?: Array<any>;
+    questions_answers?: Record<string, any>;
+    raw_qa?: Array<{ question: string; answer: string }>;
     duration?: string;
     severity?: string;
     timeline?: Array<{ date?: string; event?: string; duration?: string }>;
@@ -194,21 +200,57 @@ export default function PatientTicketDetailPage() {
   const [copied, setCopied] = useState(false);
   const [isSubmittingDraft, setIsSubmittingDraft] = useState(false);
 
+  const normalizeRevertedQuestions = (raw: any) => {
+    if (!raw) return [];
+    let list = raw;
+    if (typeof list === "string") {
+      try {
+        list = JSON.parse(list);
+      } catch {
+        list = list
+          .split("\n")
+          .map((line: string) => line.trim())
+          .filter(Boolean)
+          .map((line: string, idx: number) => ({ id: `q_${idx + 1}`, question: line, answer: "" }));
+      }
+    }
+    if (!Array.isArray(list)) {
+      list = typeof list === "object" && list !== null ? [list] : [];
+    }
+    return list
+      .map((q: any, idx: number) => {
+        if (typeof q === "string") {
+          return { id: `q_${idx + 1}`, question: q.trim(), answer: "" };
+        }
+        return {
+          id: String(q.id || `q_${idx + 1}`),
+          question: q.question || q.q || q.title || q.text || "",
+          answer: q.answer || "",
+          answered_at: q.answered_at,
+        };
+      })
+      .filter((q: any) => q.question && q.question.trim().length > 0);
+  };
+
   // Reverted Questions answering state
   const [patientAnswers, setPatientAnswers] = useState<Record<string, string>>({});
   const [submittingAnswers, setSubmittingAnswers] = useState<boolean>(false);
   const [answersSubmittedSuccess, setAnswersSubmittedSuccess] = useState<boolean>(false);
+  const [isSubmitted, setIsSubmitted] = useState<boolean>(false);
 
   // Sync questions from loaded ticket
   useEffect(() => {
-    if (ticket?.reverted_questions && Array.isArray(ticket.reverted_questions)) {
-      const initial: Record<string, string> = {};
-      ticket.reverted_questions.forEach((q) => {
-        initial[q.id] = q.answer || "";
-      });
-      setPatientAnswers(initial);
+    if (ticket?.reverted_questions) {
+      const qs = normalizeRevertedQuestions(ticket.reverted_questions);
+      if (qs.length > 0) {
+        const initial: Record<string, string> = {};
+        qs.forEach((q: any) => {
+          initial[q.id] = q.answer || "";
+        });
+        setPatientAnswers(initial);
+      }
     }
-  }, [ticket]);
+  }, [ticket?.id, ticket?.reverted_questions]);
 
   const handleSubmitPatientAnswers = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -222,10 +264,11 @@ export default function PatientTicketDetailPage() {
 
       const ok = await submitPatientAnswers(ticket.id, answersPayload);
       if (ok) {
+        setIsSubmitted(true);
         setAnswersSubmittedSuccess(true);
         setTicket((prev) => {
           if (!prev) return null;
-          const updatedQs = (prev.reverted_questions || []).map((q) => ({
+          const updatedQs = (prev.reverted_questions || []).map((q: any) => ({
             ...q,
             answer: patientAnswers[q.id] || q.answer,
             answered_at: new Date().toISOString(),
@@ -469,7 +512,9 @@ export default function PatientTicketDetailPage() {
   const sdata = ticket.symptoms_data || {};
 
   // 1. Primary Complaint
-  const primaryComplaint = valOrDash(sdata.chief_complaint || ticket.chief_complaint);
+  const primaryComplaint = valOrDash(
+    sdata.raw_complaint || sdata.complaint || sdata.summary || sdata.chief_complaint || ticket.chief_complaint
+  );
 
   // 2. Symptoms List normalization (handles random shapes: string, array of strings, array of objects, etc.)
   const rawSymptoms: any = sdata.symptoms || ticket.symptoms || [];
@@ -509,11 +554,10 @@ export default function PatientTicketDetailPage() {
     normalizedSymptoms.push({ name: primaryComplaint });
   }
 
-  // 3. Clinical Metrics
-  const overallDuration = valOrDash(sdata.duration);
-  const overallSeverity = valOrDash(sdata.severity);
-  const associatedSymptoms = valOrDash(sdata.associated_symptoms);
-  const redFlags = valOrDash(sdata.red_flags);
+  // 3. Clinical Q&A Map
+  const qaMap: Record<string, any> = (typeof sdata.questions_answers === "object" && sdata.questions_answers !== null)
+    ? sdata.questions_answers
+    : {};
 
   // 4. Chronological Timeline
   const rawTimeline = sdata.timeline || [];
@@ -540,10 +584,14 @@ export default function PatientTicketDetailPage() {
 
   // 5. Follow-up Questionnaire Answers
   const followUpRaw = sdata.follow_up_answers || ticket.vitals?.follow_up_answers || {};
-  const followUpEntries =
-    typeof followUpRaw === "object" && followUpRaw !== null
-      ? Object.entries(followUpRaw).filter(([_, v]) => v !== null && v !== undefined && String(v).trim() !== "")
-      : [];
+  let followUpEntries: [string, string][] = [];
+  if (Array.isArray(sdata.raw_qa) && sdata.raw_qa.length > 0) {
+    followUpEntries = sdata.raw_qa.map((item: any) => [String(item.question || ""), String(item.answer || "")]);
+  } else if (typeof sdata.questions_answers === "object" && sdata.questions_answers !== null) {
+    followUpEntries = Object.entries(sdata.questions_answers).map(([k, v]) => [k, String(v)]);
+  } else if (typeof followUpRaw === "object" && followUpRaw !== null) {
+    followUpEntries = Object.entries(followUpRaw).filter(([_, v]) => v !== null && v !== undefined && String(v).trim() !== "") as [string, string][];
+  }
 
   // 6. Vitals & Observations
   const vitalsObj = sdata.vitals || ticket.vitals || {};
@@ -1001,107 +1049,127 @@ export default function PatientTicketDetailPage() {
       </div>
 
       {/* Reverted Questions Card - For Patient to Fill the Answer */}
-      {ticket.reverted_questions && ticket.reverted_questions.length > 0 && (
-        <div
-          id="nurse-questions"
-          className="p-5 sm:p-6 rounded-2xl border bg-gradient-to-br from-amber-50/90 to-orange-50/50 border-amber-200 shadow-sm space-y-4"
-        >
-          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 pb-3 border-b border-amber-200/80">
-            <div className="flex items-center gap-2.5">
-              <div className="w-8 h-8 rounded-xl bg-amber-500 text-white flex items-center justify-center shrink-0 shadow-xs">
-                <HelpCircle className="w-4 h-4" />
-              </div>
-              <div>
-                <h3 className="text-sm font-bold text-slate-900 flex items-center gap-2">
-                  <span>Clinical Nurse Follow-up Questions</span>
-                  <span className="px-2 py-0.5 rounded-full text-[10px] font-bold bg-amber-200 text-amber-900">
-                    Action Required
-                  </span>
-                </h3>
-                <p className="text-xs text-slate-600">
-                  The healthcare staff requested additional details to finalize your clinical review. Please fill out your answers below.
-                </p>
-              </div>
-            </div>
+      {(() => {
+        const displayRevertedQs = normalizeRevertedQuestions(ticket?.reverted_questions);
+        if (displayRevertedQs.length === 0) return null;
 
-            {normalizeStatus(ticket.status) === "Reverted" && (
-              <span className="px-2.5 py-1 rounded-lg text-xs font-bold bg-rose-100 text-rose-800 border border-rose-200 shrink-0 self-start sm:self-center">
-                Status: Awaiting Your Answers
-              </span>
-            )}
-          </div>
+        const isAlreadySubmitted =
+          isSubmitted ||
+          answersSubmittedSuccess ||
+          (displayRevertedQs.length > 0 &&
+            displayRevertedQs.every((q: any) => Boolean(q.answer && q.answer.trim().length > 0)) &&
+            normalizeStatus(ticket?.status) !== "Reverted");
 
-          {answersSubmittedSuccess && (
-            <div className="p-3 bg-emerald-100 border border-emerald-300 rounded-xl flex items-center gap-2 text-xs font-bold text-emerald-900 animate-in fade-in">
-              <CheckCircle2 className="w-4 h-4 text-emerald-600 shrink-0" />
-              <span>
-                Thank you! Your answers have been submitted to the nursing station. Your case is now marked as &ldquo;Under Review&rdquo;.
-              </span>
-            </div>
-          )}
-
-          <form onSubmit={handleSubmitPatientAnswers} className="space-y-3.5">
-            {ticket.reverted_questions.map((q, idx) => {
-              const currentVal = patientAnswers[q.id] ?? (q.answer || "");
-              const isAnswered = Boolean(q.answer);
-
-              return (
-                <div
-                  key={q.id || idx}
-                  className="p-4 bg-white rounded-xl border border-amber-200 shadow-2xs space-y-2"
-                >
-                  <div className="flex items-start justify-between gap-2">
-                    <label className="text-xs font-bold text-slate-900 flex items-center gap-1.5">
-                      <span className="w-5 h-5 rounded-full bg-amber-100 text-amber-800 text-[11px] font-black flex items-center justify-center shrink-0">
-                        {idx + 1}
-                      </span>
-                      <span>{q.question}</span>
-                    </label>
-                    {isAnswered && (
-                      <span className="text-[10px] font-bold text-emerald-700 bg-emerald-50 px-2 py-0.5 rounded-md border border-emerald-200 shrink-0 flex items-center gap-1">
-                        <CheckCheck className="w-3 h-3 text-emerald-600" /> Answered
-                      </span>
-                    )}
-                  </div>
-
-                  <textarea
-                    rows={2}
-                    value={currentVal}
-                    onChange={(e) =>
-                      setPatientAnswers((prev) => ({
-                        ...prev,
-                        [q.id]: e.target.value,
-                      }))
-                    }
-                    placeholder="Type your answer here..."
-                    className="w-full p-2.5 bg-slate-50 border border-slate-200 focus:bg-white focus:border-amber-500 focus:ring-2 focus:ring-amber-200 rounded-lg text-xs text-slate-800 outline-hidden transition-all"
-                  />
-
-                  {q.answered_at && (
-                    <div className="text-[10px] text-slate-400">
-                      Last saved: {new Date(q.answered_at).toLocaleString()}
-                    </div>
-                  )}
+        return (
+          <div
+            id="nurse-questions"
+            className="p-5 sm:p-6 rounded-2xl border bg-gradient-to-br from-amber-50/90 to-orange-50/50 border-amber-200 shadow-sm space-y-4"
+          >
+            <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 pb-3 border-b border-amber-200/80">
+              <div className="flex items-center gap-2.5">
+                <div className="w-8 h-8 rounded-xl bg-amber-500 text-white flex items-center justify-center shrink-0 shadow-xs">
+                  <HelpCircle className="w-4 h-4" />
                 </div>
-              );
-            })}
+                <div>
+                  <h3 className="text-sm font-bold text-slate-900 flex items-center gap-2">
+                    <span>Clinical Nurse Follow-up Questions</span>
+                    <span className="px-2 py-0.5 rounded-full text-[10px] font-bold bg-amber-200 text-amber-900">
+                      {displayRevertedQs.length} {displayRevertedQs.length === 1 ? "Question" : "Questions"}
+                    </span>
+                  </h3>
+                  <p className="text-xs text-slate-600">
+                    The healthcare staff requested additional details to finalize your clinical review. Please fill out your answers below.
+                  </p>
+                </div>
+              </div>
 
-            <div className="flex items-center justify-between pt-1">
-              <span className="text-[11px] text-slate-500">
-                Submitting answers will return your ticket to active nurse review.
-              </span>
-              <button
-                type="submit"
-                disabled={submittingAnswers}
-                className="px-5 py-2.5 bg-amber-600 hover:bg-amber-700 text-white font-bold text-xs rounded-xl shadow-xs transition-colors cursor-pointer flex items-center gap-2 disabled:opacity-50"
-              >
-                <Send className="w-3.5 h-3.5" />
-                <span>{submittingAnswers ? "Submitting Answers..." : "Submit Answers to Nurse"}</span>
-              </button>
+              {normalizeStatus(ticket.status) === "Reverted" && (
+                <span className="px-2.5 py-1 rounded-lg text-xs font-bold bg-rose-100 text-rose-800 border border-rose-200 shrink-0 self-start sm:self-center">
+                  Status: Awaiting Your Answers
+                </span>
+              )}
             </div>
-          </form>
-        </div>
-      )}
+
+            {answersSubmittedSuccess && (
+              <div className="p-3 bg-emerald-100 border border-emerald-300 rounded-xl flex items-center gap-2 text-xs font-bold text-emerald-900 animate-in fade-in">
+                <CheckCircle2 className="w-4 h-4 text-emerald-600 shrink-0" />
+                <span>
+                  Thank you! Your answers have been submitted to the nursing station. Your case is now marked as &ldquo;Under Review&rdquo;.
+                </span>
+              </div>
+            )}
+
+            <form onSubmit={handleSubmitPatientAnswers} className="space-y-3.5">
+              {displayRevertedQs.map((q: any, idx: number) => {
+                const currentVal = patientAnswers[q.id] ?? (q.answer || "");
+                const isAnswered = Boolean(q.answer);
+
+                return (
+                  <div
+                    key={q.id || idx}
+                    className="p-4 bg-white rounded-xl border border-amber-200 shadow-2xs space-y-2"
+                  >
+                    <div className="flex items-start justify-between gap-2">
+                      <label className="text-xs font-bold text-slate-900 flex items-center gap-1.5">
+                        <span className="w-5 h-5 rounded-full bg-amber-100 text-amber-800 text-[11px] font-black flex items-center justify-center shrink-0">
+                          {idx + 1}
+                        </span>
+                        <span>{q.question}</span>
+                      </label>
+                      {isAnswered && (
+                        <span className="text-[10px] font-bold text-emerald-700 bg-emerald-50 px-2 py-0.5 rounded-md border border-emerald-200 shrink-0 flex items-center gap-1">
+                          <CheckCheck className="w-3 h-3 text-emerald-600" /> Answered
+                        </span>
+                      )}
+                    </div>
+
+                    <textarea
+                      rows={2}
+                      disabled={isAlreadySubmitted || submittingAnswers}
+                      value={currentVal}
+                      onChange={(e) =>
+                        setPatientAnswers((prev) => ({ ...prev, [q.id]: e.target.value }))
+                      }
+                      placeholder={isAlreadySubmitted ? "Your answer has been submitted." : "Type your answer here..."}
+                      className={`w-full p-2.5 rounded-lg text-xs shadow-2xs transition-all ${
+                        isAlreadySubmitted
+                          ? "bg-slate-100 text-slate-600 border border-slate-200 cursor-not-allowed"
+                          : "bg-slate-50 border border-slate-200 text-slate-800 focus:outline-hidden focus:ring-2 focus:ring-amber-500"
+                      }`}
+                    />
+                  </div>
+                );
+              })}
+
+              <div className="flex justify-end pt-2">
+                <button
+                  type="submit"
+                  disabled={submittingAnswers || isAlreadySubmitted}
+                  className={`px-4 py-2 rounded-xl text-xs font-bold transition-all flex items-center gap-2 ${
+                    isAlreadySubmitted
+                      ? "bg-slate-200 text-slate-500 border border-slate-300 shadow-none cursor-not-allowed select-none"
+                      : "bg-amber-600 hover:bg-amber-700 text-white shadow-xs cursor-pointer disabled:opacity-50"
+                  }`}
+                >
+                  {submittingAnswers ? (
+                    <>
+                      <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                      <span>Submitting Answers...</span>
+                    </>
+                  ) : isAlreadySubmitted ? (
+                    <>
+                      <CheckCircle2 className="w-3.5 h-3.5 text-slate-500" />
+                      <span>Answers Submitted</span>
+                    </>
+                  ) : (
+                    <span>Submit Answers to Nurse</span>
+                  )}
+                </button>
+              </div>
+            </form>
+          </div>
+        );
+      })()}
 
       {/* Grid: 2 Columns - Clinical Information & Patient Details */}
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-5">
@@ -1162,29 +1230,7 @@ export default function PatientTicketDetailPage() {
               )}
             </div>
 
-            {/* Structured Clinical Symptom Metrics */}
-            <div className="grid grid-cols-2 sm:grid-cols-4 gap-2 pt-2 border-t border-slate-100">
-              <div className="p-2.5 rounded-xl bg-slate-50 border border-slate-100">
-                <span className="text-[10px] text-slate-400 font-bold uppercase block">Duration</span>
-                <p className="font-bold text-slate-800 text-xs mt-0.5">{overallDuration}</p>
-              </div>
-              <div className="p-2.5 rounded-xl bg-slate-50 border border-slate-100">
-                <span className="text-[10px] text-slate-400 font-bold uppercase block">Severity</span>
-                <p className="font-bold text-slate-800 text-xs mt-0.5">{overallSeverity}</p>
-              </div>
-              <div className="p-2.5 rounded-xl bg-slate-50 border border-slate-100">
-                <span className="text-[10px] text-slate-400 font-bold uppercase block">Associated</span>
-                <p className="font-bold text-slate-800 text-xs mt-0.5 truncate" title={associatedSymptoms}>
-                  {associatedSymptoms}
-                </p>
-              </div>
-              <div className="p-2.5 rounded-xl bg-slate-50 border border-slate-100">
-                <span className="text-[10px] text-slate-400 font-bold uppercase block">Red Flags</span>
-                <p className="font-bold text-slate-800 text-xs mt-0.5 truncate" title={redFlags}>
-                  {redFlags}
-                </p>
-              </div>
-            </div>
+
           </div>
 
           {/* Card 2: Chronological Symptom Timeline */}

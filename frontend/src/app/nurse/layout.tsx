@@ -1,7 +1,7 @@
 import React from "react";
 
 export const metadata = {
-  title: "Nurse Command Station | TriageAssist",
+  title: "Nurse Command Station | TRAAYA",
   description: "Clinical Triage & Patient Intake Command Portal for Primary Health Centres (PHC)",
 };
 

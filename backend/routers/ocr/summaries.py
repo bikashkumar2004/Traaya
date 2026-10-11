@@ -1,6 +1,6 @@
-from typing import List, Dict, Any, Tuple
+from typing import List, Dict, Any, Tuple, Optional
 
-def generate_patient_summary_details(test_name: str, parameters: List[Dict[str, Any]], clinical_flags: List[str]) -> Tuple[str, Dict[str, Any]]:
+def generate_patient_summary_details(test_name: str, parameters: List[Dict[str, Any]], clinical_flags: List[str], lifestyle_advice: Optional[List[str]] = None) -> Tuple[str, Dict[str, Any]]:
     """
     Generates plain-language, patient-centric summary details for patients
     who may struggle with complex medical terminology and lab biomarker metrics.
@@ -79,17 +79,8 @@ def generate_patient_summary_details(test_name: str, parameters: List[Dict[str, 
 
     normal_findings = [f"{p.get('name')}: Healthy ({p.get('value')} {p.get('unit', '')})".strip() for p in normal]
 
-    what_to_ask_doctor = [
-        f"What is the most likely cause of my {abnormal[0]['name'] if abnormal else 'results'}?",
-        "Do I need any follow-up tests or specific medications?",
-        "What dietary or daily activity adjustments do you recommend for me?"
-    ]
-
-    lifestyle_tips = [
-        "Drink 8-10 glasses of clean water daily to support cell metabolism and kidney function.",
-        "Ensure 7-8 hours of sound sleep every night to help your body recuperate.",
-        "Keep a printed or digital copy of this report handy during your clinic or PHC visit."
-    ]
+    # Only include lifestyle tips if dynamically extracted from the document
+    real_lifestyle = [str(tip).strip() for tip in (lifestyle_advice or []) if str(tip).strip()]
 
     summary_details = {
         "overview": patient_summary,
@@ -97,8 +88,7 @@ def generate_patient_summary_details(test_name: str, parameters: List[Dict[str, 
         "urgency": urgency,
         "abnormal_findings": abnormal_findings,
         "normal_findings": normal_findings,
-        "what_to_ask_doctor": what_to_ask_doctor,
-        "lifestyle_tips": lifestyle_tips,
+        "lifestyle_tips": real_lifestyle,
         "clinical_flags": clinical_flags
     }
 

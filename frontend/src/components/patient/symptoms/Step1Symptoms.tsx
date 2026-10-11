@@ -127,6 +127,9 @@ export function Step1Symptoms({
             <Globe className="w-4 h-4 text-teal-700" />
             <span>Preferred Intake Language</span>
           </span>
+          <span className="text-[11px] text-slate-500 font-medium">
+            (For doctor conversation &amp; speech voice)
+          </span>
         </label>
         <div className="w-full sm:w-80">
           <Select value={selectedLanguage} onValueChange={(val) => setSelectedLanguage(val)}>
@@ -528,23 +531,57 @@ export function Step1Symptoms({
         {/* Subtle Divider */}
         <div className="relative py-1 flex items-center justify-center">
           <div className="w-full border-t border-slate-200" />
-          <span className="absolute px-3 bg-slate-50 text-[11px] text-slate-400 font-bold uppercase tracking-wider">
-            OR TYPE COMPLAINTS
+          <span className="absolute px-3 bg-slate-50 text-[11px] text-slate-500 font-bold uppercase tracking-wider">
+            SYMPTOMS INPUT FIELD
           </span>
         </div>
 
-        {/* Textarea Description */}
-        <div className="space-y-1.5">
-          <label className="text-slate-700 font-bold text-xs block">
-            Type or Dictate Details
-          </label>
-          <textarea
-            rows={4}
-            value={symptomText}
-            onChange={(e) => setSymptomText(e.target.value)}
-            placeholder="e.g., I have had a continuous fever for 3 days with headache, body chills, and mild coughing..."
-            className="w-full p-4 bg-white border border-slate-200 rounded-2xl text-slate-900 font-medium text-xs sm:text-sm focus:outline-none focus:ring-2 focus:ring-teal-700/20 focus:border-teal-700 placeholder:text-slate-400 resize-none shadow-inner"
-          />
+        {/* Textarea Description with Live Speech Indicator */}
+        <div className="space-y-2">
+          <div className="flex items-center justify-between flex-wrap gap-2">
+            <div className="flex items-center gap-2">
+              <label htmlFor="symptoms-textarea" className="text-slate-800 font-bold text-xs">
+                Clinical Details &amp; Complaints:
+              </label>
+              {isRecording && (
+                <span className="inline-flex items-center gap-1.5 px-2 py-0.5 rounded-full text-[10px] font-black uppercase tracking-wider bg-rose-100 text-rose-700 border border-rose-200 animate-pulse">
+                  <span className="w-1.5 h-1.5 rounded-full bg-rose-600 animate-ping" />
+                  Auto-writing from microphone...
+                </span>
+              )}
+              {isTranscribing && (
+                <span className="inline-flex items-center gap-1.5 px-2 py-0.5 rounded-full text-[10px] font-black uppercase tracking-wider bg-teal-100 text-teal-800 border border-teal-200 animate-pulse">
+                  <Loader2 className="w-3 h-3 animate-spin" />
+                  Transcribing into input...
+                </span>
+              )}
+            </div>
+            {symptomText && (
+              <button
+                type="button"
+                onClick={() => setSymptomText("")}
+                className="text-[11px] font-bold text-slate-400 hover:text-rose-600 transition-colors cursor-pointer"
+              >
+                Clear text
+              </button>
+            )}
+          </div>
+          <div className="relative">
+            <textarea
+              id="symptoms-textarea"
+              rows={4}
+              value={symptomText}
+              onChange={(e) => setSymptomText(e.target.value)}
+              placeholder="Speak using the microphone above (speech writes here automatically), or type details freely..."
+              className={`w-full p-4 bg-white border rounded-2xl text-slate-900 font-medium text-xs sm:text-sm focus:outline-none placeholder:text-slate-400 resize-none shadow-inner transition-all ${
+                isRecording
+                  ? "border-rose-400 ring-2 ring-rose-400/30 bg-rose-50/10 shadow-rose-500/5"
+                  : isTranscribing
+                  ? "border-teal-400 ring-2 ring-teal-400/30 bg-teal-50/10"
+                  : "border-slate-200 focus:ring-2 focus:ring-teal-700/20 focus:border-teal-700"
+              }`}
+            />
+          </div>
         </div>
 
         {/* Dynamic Quick Suggestion Chips */}
@@ -577,7 +614,7 @@ export function Step1Symptoms({
             </div>
             <div>
               <span className="text-xs sm:text-sm font-bold text-slate-900 block">
-                Are you want Online Teleconsult?
+                Do you prefer online consultation?
               </span>
               <span className="text-[11px] text-slate-500 block leading-tight mt-0.5">
                 Choose Yes for phone/video doctor consultation, or No to visit the healthcare facility in person.

@@ -21,7 +21,7 @@ export function LandingPilotCta() {
           </h2>
 
           <p className="text-xs sm:text-sm text-slate-300 leading-relaxed">
-            Partner with TriageAssist to de-congest crowded OPDs, equip frontline workers with assistive intelligence, and create ABDM-compliant clinical records from day one.
+            Partner with TRAAYA to de-congest crowded OPDs, equip frontline workers with assistive intelligence, and create ABDM-compliant clinical records from day one.
           </p>
         </div>
 
@@ -35,7 +35,7 @@ export function LandingPilotCta() {
           </Link>
 
           <a
-            href="mailto:contact@triageassist.gov.in"
+            href="mailto:contact@traaya.live"
             className="px-6 py-3.5 rounded-xl bg-teal-800/80 hover:bg-teal-700 border border-teal-600/50 text-white font-semibold text-sm text-center transition-all hover:scale-[1.02] flex items-center justify-center gap-2"
           >
             <PhoneCall className="w-4 h-4 text-teal-300" />

@@ -28,7 +28,7 @@ function generateReportPdfBuffer(data: {
   ];
 
   let stream = "BT\n";
-  stream += "/F2 18 Tf\n50 790 Td\n(TRIAGE ASSIST - CLINICAL SYMPTOM REPORT) Tj\n";
+  stream += "/F2 18 Tf\n50 790 Td\n(TRAAYA - CLINICAL SYMPTOM REPORT) Tj\n";
   stream += "/F1 10 Tf\n0 -22 Td\n(" + sanitize(`Case Number: ${data.caseNumber}   |   Date: ${data.dateStr}   |   Mode: ${data.consultationMode}`) + ") Tj\n";
   stream += "0 -15 Td\n(" + sanitize(`Patient: ${data.patientName}${data.patientRelation ? ` (${data.patientRelation})` : ""}   |   Priority: ${data.priority.toUpperCase()}`) + ") Tj\n";
   stream += "/F2 12 Tf\n0 -30 Td\n(1. CHIEF COMPLAINT) Tj\n";
@@ -69,7 +69,7 @@ function generateReportPdfBuffer(data: {
   stream += "/F2 12 Tf\n0 -26 Td\n(5. AI CLINICAL TRIAGE REASONING) Tj\n";
   stream += "/F1 10 Tf\n0 -16 Td\n(" + sanitize(data.clinicalReasoning.slice(0, 95)) + ") Tj\n";
 
-  stream += "/F1 8 Tf\n0 -40 Td\n(Generated securely by TriageAssist Healthcare Platform. Compliant with ABDM & DPDP Standards.) Tj\n";
+  stream += "/F1 8 Tf\n0 -40 Td\n(Generated securely by TRAAYA Healthcare Platform. Compliant with ABDM & DPDP Standards.) Tj\n";
   stream += "ET\n";
 
   const streamLength = Buffer.byteLength(stream, "utf8");
@@ -100,6 +100,66 @@ function generateReportPdfBuffer(data: {
     trailer;
 
   return Buffer.from(finalPdfStr, "utf8");
+}
+
+async function generateGroqSummary(
+  symptoms: string[],
+  rawQa: Array<{ question: string; answer: string }>,
+  groqApiKey?: string,
+  rawComplaint?: string
+): Promise<string> {
+  const symsStr = symptoms.length > 0 ? symptoms.join(", ") : "general clinical symptoms";
+  const cleanComplaint = (rawComplaint || "").trim();
+
+  // Simple clean fallback summary - never dump raw questions and answers
+  const fallback = cleanComplaint
+    ? `Patient presents with ${symsStr}. Primary complaint: "${cleanComplaint}".`
+    : `Patient presents with ${symsStr} for clinical triage evaluation.`;
+
+  if (!groqApiKey) return fallback;
+
+  const qaContext = rawQa.slice(0, 6).map((qa) => `${qa.question}: ${qa.answer}`).join(". ");
+  const models = ["llama-3.3-70b-versatile", "llama-3.1-8b-instant"];
+
+  for (const model of models) {
+    try {
+      const res = await fetch("https://api.groq.com/openai/v1/chat/completions", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${groqApiKey}`,
+        },
+        body: JSON.stringify({
+          model,
+          messages: [
+            {
+              role: "system",
+              content:
+                "You are an emergency clinical triage assistant. Generate a simple, concise 1 to 2 sentence clinical summary (maximum 30 words) describing the patient's condition. Do NOT repeat or list questions or answers verbatim. Do NOT use bullet points, markdown bolding, or headers. Output only plain summary text.",
+            },
+            {
+              role: "user",
+              content: `Reported Symptoms: ${symsStr}\nPrimary Complaint: ${cleanComplaint || "None"}\nIntake Details: ${qaContext || "None"}`,
+            },
+          ],
+          temperature: 0.2,
+          max_tokens: 100,
+        }),
+      });
+
+      if (res.ok) {
+        const data = await res.json();
+        const content = data.choices?.[0]?.message?.content?.trim();
+        if (content && !content.includes("?:") && content.length < 280) {
+          return content.replace(/^["']|["']$/g, "").trim();
+        }
+      }
+    } catch (e) {
+      console.warn(`[Groq summary generation failed on ${model}]:`, e);
+    }
+  }
+
+  return fallback;
 }
 
 export async function POST(req: Request) {
@@ -242,42 +302,170 @@ export async function POST(req: Request) {
       clinicalReasoning = `Sub-acute or mild symptoms with normal body temperature (${tempVal}°F). Routine outpatient care recommended.`;
     }
 
+    const rawComplaint = String(body.raw_complaint || body.symptom_text || body.raw_symptoms || "").trim();
     const chiefComplaint =
-      Array.isArray(symptoms) && symptoms.length > 0
-        ? symptoms.join(", ")
-        : "Reported symptoms";
+      rawComplaint ||
+      (Array.isArray(symptoms) && symptoms.length > 0 ? symptoms.join(", ") : "Reported symptoms");
 
-    // Transform follow-up answers into question/answer pairs
-    const followUpQaList = Object.entries(follow_up_answers).map(([q, a]) => ({
-      question: q,
-      answer: String(a),
-    }));
+    // Build raw_qa array and 1-2 word questions_answers map
+    const rawQa: Array<{ question: string; answer: string }> = [];
+    const questionsAnswers: Record<string, string> = {};
 
-    // Build strictly organized symptoms_data JSONB object
-    const symptomsData = {
-      chief_complaint: chiefComplaint,
-      current_step: current_step ? Number(current_step) : 1,
-      symptoms: Array.isArray(symptoms)
-        ? symptoms.map((s: string) =>
-            typeof s === "string"
-              ? {
-                  name: s,
-                  duration: "Active",
-                  severity: priority === "Red" ? "Severe" : priority === "Yellow" ? "Moderate" : "Mild",
-                }
-              : s
-          )
-        : [],
-      duration: "3 days",
-      severity: priority === "Red" ? "Severe" : priority === "Yellow" ? "Moderate" : "Mild",
-      timeline: timeline || [],
-      follow_up_answers: follow_up_answers || {},
-      vitals: {
-        temperature: `${tempVal}°F`,
-        recorded_at: new Date().toISOString(),
-      },
-      clinical_reasoning: clinicalReasoning,
+    const followUpQuestionsList: Array<any> = Array.isArray(body.follow_up_questions)
+      ? body.follow_up_questions
+      : [];
+
+    const toShortKey = (id: string, qText: string): string => {
+      const text = (qText || id).toLowerCase();
+      const idLower = (id || "").toLowerCase();
+
+      // 1. Recurrence & Frequency (checked first so "how often does fever/shivering come back" maps accurately)
+      if (text.includes("come back") || text.includes("how often") || idLower.includes("frequency")) {
+        return "recurrence_frequency";
+      }
+
+      // 2. Associated Symptoms & Red Flags (checked before single symptom matches)
+      if (
+        text.includes("cough, sore throat") ||
+        text.includes("skin spots") ||
+        text.includes("other problems") ||
+        text.includes("associated") ||
+        idLower.includes("associated_symptoms") ||
+        (text.includes("vomiting") && text.includes("cough")) ||
+        (text.includes("spots") && text.includes("bleeding"))
+      ) {
+        return "associated_symptoms";
+      }
+
+      // 3. Daily persistence / duration during the day
+      if (text.includes("how long does the fever stay high") || (text.includes("stay high") && text.includes("day"))) {
+        return "daily_persistence";
+      }
+
+      // 4. Fever & Temperature specific
+      if (text.includes("how high") || (text.includes("fever") && text.includes("shiver")) || text.includes("chills")) {
+        return "fever_and_chills";
+      }
+      if (text.includes("how many days") || text.includes("days have you had this fever") || (idLower.includes("onset") && text.includes("fever"))) {
+        return "fever_duration";
+      }
+      if (text.includes("feel during the day") || text.includes("how does the fever feel")) {
+        return "daily_fever_pattern";
+      }
+      if (text.includes("fever medicine") || text.includes("paracetamol") || (text.includes("medicine") && text.includes("bring the fever down"))) {
+        return "medicine_response";
+      }
+      if (text.includes("temperature") || text.includes("temp")) {
+        return "body_temperature";
+      }
+
+      // 5. Weakness, mental state & fatigue
+      if (text.includes("how weak") || text.includes("sleepy") || text.includes("dizzy") || text.includes("confused")) {
+        return "weakness_severity";
+      }
+
+      // 6. Spreading / Radiation / Bones / Joints
+      if (text.includes("spreading") || text.includes("bones") || text.includes("joints") || text.includes("move") || idLower.includes("radiation")) {
+        if (text.includes("bone") || text.includes("joint")) return "joint_or_bone_pain";
+        return "pain_radiation";
+      }
+
+      // 7. Pain Location & Site
+      if (text.includes("where does") || text.includes("where on your body") || text.includes("where in your chest") || text.includes("hurt most") || idLower.includes("location")) {
+        return "pain_location";
+      }
+
+      // 8. Onset / Timing / Start
+      if (text.includes("when did") || text.includes("did it happen suddenly") || text.includes("start time") || idLower.includes("onset")) {
+        return "onset_timing";
+      }
+
+      // 9. Aggravating & Relieving Factors
+      if (text.includes("better or worse") || text.includes("touching your belly") || idLower.includes("aggravating")) {
+        return "aggravating_relieving_factors";
+      }
+
+      // 9. Specific organ complaints
+      if (text.includes("chest pain") || idLower.includes("chest")) return "chest_pain";
+      if (text.includes("headache")) return "headache_severity";
+      if (text.includes("breath") || text.includes("dyspnea") || text.includes("gasping")) return "breathing_difficulty";
+      if (text.includes("cough")) return "cough_details";
+      if (text.includes("vomit") || text.includes("nausea")) return "vomiting_nausea";
+      if (text.includes("rash") || text.includes("spot")) return "skin_rashes";
+      if (text.includes("stomach") || text.includes("belly") || text.includes("abdomen")) return "abdominal_pain";
+
+      // 10. Character & Severity generic
+      if (idLower.includes("character") || text.includes("kind of pain") || text.includes("what does it feel like")) {
+        return "symptom_character";
+      }
+      if (idLower.includes("severity") || text.includes("scale of 0 to 10") || text.includes("how strong") || text.includes("pain")) {
+        return "pain_severity";
+      }
+      if (idLower.includes("duration") || text.includes("how long")) {
+        return "symptom_duration";
+      }
+
+      // 11. Clean semantic fallback
+      const cleanStr = (qText || id)
+        .replace(/^q\d+[_a-z0-9]*/i, "")
+        .replace(/[^a-z0-9 ]/gi, " ")
+        .toLowerCase();
+
+      const stopWords = new Set(["how", "what", "where", "when", "does", "do", "you", "your", "have", "with", "the", "a", "an", "is", "are", "along", "most", "any"]);
+      const words = cleanStr.split(/\s+/).filter((w) => w.length > 2 && !stopWords.has(w));
+      if (words.length >= 2) return `${words[0]}_${words[1]}`;
+      if (words.length === 1) return words[0];
+      return "clinical_detail";
     };
+
+    const processedKeys = new Set<string>();
+
+    for (const fq of followUpQuestionsList) {
+      const qText = fq.question || fq.title || "";
+      const qId = fq.id || "";
+      const ansVal = follow_up_answers?.[qId] ?? follow_up_answers?.[qText];
+      if (ansVal !== undefined && ansVal !== null && String(ansVal).trim() !== "") {
+        const unit = fq.unit || "";
+        const formattedAns = String(ansVal).trim() + (unit && !String(ansVal).includes(unit) ? unit : "");
+        rawQa.push({ question: qText || qId, answer: formattedAns });
+        const shortKey = toShortKey(qId, qText);
+        questionsAnswers[shortKey] = formattedAns;
+        if (qId) processedKeys.add(qId);
+        if (qText) processedKeys.add(qText);
+      }
+    }
+
+    if (typeof follow_up_answers === "object" && follow_up_answers !== null) {
+      for (const [k, v] of Object.entries(follow_up_answers)) {
+        if (!processedKeys.has(k) && v !== null && v !== undefined && String(v).trim() !== "") {
+          const ansStr = String(v).trim();
+          rawQa.push({ question: k, answer: ansStr });
+          const shortKey = toShortKey("", k);
+          questionsAnswers[shortKey] = ansStr;
+        }
+      }
+    }
+
+    const symptomsList: string[] = Array.isArray(symptoms)
+      ? symptoms
+          .map((s: any) => (typeof s === "string" ? s.trim() : s?.name || s?.symptom || ""))
+          .filter(Boolean)
+      : [];
+
+    const groqKey = process.env.GROQ_API_KEY?.trim() || "";
+    const summaryText = await generateGroqSummary(symptomsList, rawQa, groqKey, rawComplaint);
+
+    // Build the requested clean symptoms_data JSON structure with raw_complaint from Step 1
+    const symptomsData = {
+      symptoms: symptomsList,
+      raw_complaint: rawComplaint || (symptomsList.length > 0 ? symptomsList.join(", ") : ""),
+      summary: summaryText,
+      questions_answers: questionsAnswers,
+      raw_qa: rawQa,
+      ...(current_step ? { current_step: Number(current_step) } : {}),
+    };
+
+    const followUpQaList = rawQa;
 
     // Build structured present address object
     const resolvedPresentAddress = {

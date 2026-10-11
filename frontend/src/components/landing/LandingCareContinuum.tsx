@@ -15,7 +15,7 @@ export function LandingCareContinuum() {
           Designed for Every Node in the Continuum of Care
         </h2>
         <p className="text-xs sm:text-sm text-slate-600 max-w-xl mx-auto">
-          TriageAssist aligns patients, frontline workers, and doctors through a unified, sync-resilient clinical language tailored for resource-constrained environments.
+          TRAAYA aligns patients, frontline workers, and doctors through a unified, sync-resilient clinical language tailored for resource-constrained environments.
         </p>
       </div>
 

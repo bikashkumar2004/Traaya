@@ -21,6 +21,62 @@ import {
   UploadedReportInfo,
 } from "@/components/patient/symptoms";
 
+// Helper function to encode raw PCM samples directly into standard 16kHz mono WAV format
+function encodeWav(samples: Float32Array, sampleRate: number = 16000): Blob {
+  const buffer = new ArrayBuffer(44 + samples.length * 2);
+  const view = new DataView(buffer);
+
+  const writeString = (offset: number, str: string) => {
+    for (let i = 0; i < str.length; i++) {
+      view.setUint8(offset + i, str.charCodeAt(i));
+    }
+  };
+
+  writeString(0, "RIFF");
+  view.setUint32(4, 36 + samples.length * 2, true);
+  writeString(8, "WAVE");
+  writeString(12, "fmt ");
+  view.setUint32(16, 16, true);
+  view.setUint16(20, 1, true); // PCM
+  view.setUint16(22, 1, true); // Mono
+  view.setUint32(24, sampleRate, true);
+  view.setUint32(28, sampleRate * 2, true);
+  view.setUint16(32, 2, true);
+  view.setUint16(34, 16, true); // 16-bit
+  writeString(36, "data");
+  view.setUint32(40, samples.length * 2, true);
+
+  let offset = 44;
+  for (let i = 0; i < samples.length; i++) {
+    const s = Math.max(-1, Math.min(1, samples[i]));
+    view.setInt16(offset, s < 0 ? s * 0x8000 : s * 0x7fff, true);
+    offset += 2;
+  }
+
+  return new Blob([buffer], { type: "audio/wav" });
+}
+
+// Resamples audio buffer cleanly using linear interpolation to 16kHz for Sarvam AI STT
+function downsampleTo16k(
+  input: Float32Array,
+  inputRate: number,
+  targetRate: number = 16000
+): Float32Array {
+  if (inputRate === targetRate || input.length === 0) return input;
+  const ratio = inputRate / targetRate;
+  const targetLength = Math.round(input.length / ratio);
+  const result = new Float32Array(targetLength);
+  for (let i = 0; i < targetLength; i++) {
+    const pos = i * ratio;
+    const idx = Math.floor(pos);
+    const frac = pos - idx;
+    const s1 = input[idx] || 0;
+    const s2 = input[idx + 1] !== undefined ? input[idx + 1] : s1;
+    result[i] = s1 + frac * (s2 - s1);
+  }
+  return result;
+}
+
 function PatientReportSymptomsForm() {
   const { user, updateProfile } = useAuth();
   const searchParams = useSearchParams();
@@ -123,12 +179,25 @@ function PatientReportSymptomsForm() {
   const [recordingSeconds, setRecordingSeconds] = useState<number>(0);
   const [isOnlineTeleconsult, setIsOnlineTeleconsult] = useState<boolean>(true);
   const isRecordingRef = useRef<boolean>(false);
-  const baseTextRef = useRef<string>("");
+  const previousTextBeforeRecordingRef = useRef<string>("");
+  const currentSessionLiveTextRef = useRef<string>("");
+  const audioContextRef = useRef<AudioContext | null>(null);
+  const scriptProcessorRef = useRef<ScriptProcessorNode | null>(null);
+  const pcmChunksRef = useRef<Float32Array[]>([]);
+  const audioSampleRateRef = useRef<number>(16000);
+  const animationFrameRef = useRef<number | null>(null);
+  const hasSpokenRef = useRef<boolean>(false);
   const recognitionRef = useRef<any>(null);
   const timerRef = useRef<NodeJS.Timeout | null>(null);
   const mediaRecorderRef = useRef<MediaRecorder | null>(null);
   const mediaStreamRef = useRef<MediaStream | null>(null);
   const audioChunksRef = useRef<Blob[]>([]);
+
+  // Preferred Intake Language is strictly for doctor conversation preference & speech voice dictation
+  // It does NOT translate the website
+  const handleSelectLanguage = (newLang: string) => {
+    setSelectedLanguage(newLang);
+  };
 
   // Step 2: Extracted Information & Follow-up questions (Interactive Doctor Intake)
   const [currentQuestionIndex, setCurrentQuestionIndex] = useState<number>(0);
@@ -234,8 +303,8 @@ function PatientReportSymptomsForm() {
             .filter(Boolean);
           if (names.length > 0) setExtractedSymptoms(names);
         }
-        if (sdata.chief_complaint) {
-          setSymptomText(sdata.chief_complaint);
+        if (sdata.raw_complaint || sdata.complaint || sdata.chief_complaint) {
+          setSymptomText(sdata.raw_complaint || sdata.complaint || sdata.chief_complaint);
         }
         if (sdata.timeline && Array.isArray(sdata.timeline)) {
           setTimeline(sdata.timeline);
@@ -375,9 +444,9 @@ function PatientReportSymptomsForm() {
   }, [addressFilteredFacilities, selectedFacilityId]);
 
   // Sarvam AI Speech-to-Text Processor
-  const processSarvamTranscription = async (audioBlob: Blob) => {
-    if (!audioBlob || audioBlob.size < 500) {
-      console.warn("Recorded audio too small for transcription");
+  const processSarvamTranscription = async (audioBlob: Blob, recordedMime: string = "audio/wav") => {
+    if (!audioBlob || audioBlob.size < 100) {
+      console.warn("Recorded audio too small for transcription", audioBlob?.size);
       return;
     }
 
@@ -389,8 +458,9 @@ function PatientReportSymptomsForm() {
           l.code.toLowerCase() === selectedLanguage.toLowerCase()
       ) || INDIAN_LANGUAGES[0];
 
+      // Form multipart payload for Sarvam STT API route
       const formData = new FormData();
-      formData.append("file", audioBlob, "symptom_recording.webm");
+      formData.append("file", audioBlob, "symptom_recording.wav");
       formData.append("language_code", langObj.bcp47);
       formData.append("language", langObj.name);
 
@@ -402,12 +472,13 @@ function PatientReportSymptomsForm() {
       if (res.ok) {
         const data = await res.json();
         if (data.success && data.transcript) {
-          const newTranscript = data.transcript.trim();
-          setSymptomText((prev) => {
-            if (!prev || !prev.trim()) return newTranscript;
-            if (prev.includes(newTranscript)) return prev;
-            return `${prev.trim()} ${newTranscript}`;
-          });
+          const sarvamTranscript = data.transcript.trim();
+          if (sarvamTranscript) {
+            // Automatically write Sarvam transcript directly into the symptom text area
+            const base = previousTextBeforeRecordingRef.current.trim();
+            const updated = base ? `${base} ${sarvamTranscript}` : sarvamTranscript;
+            setSymptomText(updated);
+          }
         }
       } else {
         const errJson = await res.json().catch(() => ({}));
@@ -422,108 +493,232 @@ function PatientReportSymptomsForm() {
 
   // Continuous Voice Dictation Handlers with Sarvam AI STT
   const stopVoiceDictation = () => {
+    if (!isRecordingRef.current) return;
     isRecordingRef.current = false;
     setIsRecording(false);
+
+    if (animationFrameRef.current) {
+      cancelAnimationFrame(animationFrameRef.current);
+      animationFrameRef.current = null;
+    }
 
     if (timerRef.current) {
       clearInterval(timerRef.current);
       timerRef.current = null;
     }
 
+    // Stop browser SpeechRecognition if running
     if (recognitionRef.current) {
       try {
         recognitionRef.current.onend = null;
         recognitionRef.current.onerror = null;
+        recognitionRef.current.onresult = null;
         recognitionRef.current.stop();
       } catch {}
       recognitionRef.current = null;
     }
 
-    // Stop MediaRecorder and trigger audio blob processing
-    if (mediaRecorderRef.current && mediaRecorderRef.current.state !== "inactive") {
+    // Disconnect script processor
+    if (scriptProcessorRef.current) {
       try {
-        mediaRecorderRef.current.stop();
-      } catch (e) {
-        console.warn("MediaRecorder stop error:", e);
-      }
+        scriptProcessorRef.current.disconnect();
+        scriptProcessorRef.current.onaudioprocess = null;
+      } catch {}
+      scriptProcessorRef.current = null;
     }
 
+    // Collect recorded PCM chunks
+    const chunks = pcmChunksRef.current;
+    const totalSamples = chunks.reduce((acc, c) => acc + c.length, 0);
+
+    // Stop microphone stream tracks
     if (mediaStreamRef.current) {
-      mediaStreamRef.current.getTracks().forEach((track) => track.stop());
+      try {
+        mediaStreamRef.current.getTracks().forEach((track) => track.stop());
+      } catch {}
       mediaStreamRef.current = null;
     }
 
+    // Close AudioContext
+    if (audioContextRef.current) {
+      try {
+        audioContextRef.current.close();
+      } catch {}
+      audioContextRef.current = null;
+    }
+
     setRecordingSeconds(0);
+
+    // Process high-fidelity 16kHz WAV audio for Sarvam STT
+    if (totalSamples > 800) {
+      const merged = new Float32Array(totalSamples);
+      let offset = 0;
+      for (const chunk of chunks) {
+        merged.set(chunk, offset);
+        offset += chunk.length;
+      }
+
+      const inputRate = audioSampleRateRef.current || 44100;
+      const samples16k = downsampleTo16k(merged, inputRate, 16000);
+      const wavBlob = encodeWav(samples16k, 16000);
+      pcmChunksRef.current = [];
+      processSarvamTranscription(wavBlob, "audio/wav");
+    } else {
+      console.warn("Recorded audio too brief for transcription:", totalSamples);
+      pcmChunksRef.current = [];
+    }
   };
 
   const startVoiceDictation = async () => {
     isRecordingRef.current = true;
     setIsRecording(true);
     setRecordingSeconds(0);
-    audioChunksRef.current = [];
-    baseTextRef.current = symptomText;
+    pcmChunksRef.current = [];
+    previousTextBeforeRecordingRef.current = symptomText;
+    currentSessionLiveTextRef.current = "";
+    hasSpokenRef.current = false;
 
     if (timerRef.current) clearInterval(timerRef.current);
     timerRef.current = setInterval(() => {
-      setRecordingSeconds((prev) => prev + 1);
+      setRecordingSeconds((prev) => {
+        // Auto-finalize dictation if it hits 45 seconds to keep speech segments crisp
+        if (prev >= 45) {
+          stopVoiceDictation();
+          return 45;
+        }
+        return prev + 1;
+      });
     }, 1000);
 
-    // 1. Capture microphone audio with MediaRecorder for Sarvam AI STT
+    // 1. Capture microphone audio with Web Audio API (PCM) + Analyser VAD
     try {
       if (typeof navigator !== "undefined" && navigator.mediaDevices?.getUserMedia) {
-        const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+        const stream = await navigator.mediaDevices.getUserMedia({
+          audio: {
+            echoCancellation: true,
+            noiseSuppression: true,
+            autoGainControl: true,
+          },
+        });
         mediaStreamRef.current = stream;
 
-        const mimeType =
-          typeof MediaRecorder !== "undefined" && MediaRecorder.isTypeSupported("audio/webm")
-            ? "audio/webm"
-            : "";
+        // Setup real-time audio pipeline for raw PCM recording and voice activity detection
+        try {
+          const AudioContextClass = window.AudioContext || (window as any).webkitAudioContext;
+          if (AudioContextClass) {
+            const audioCtx = new AudioContextClass();
+            if (audioCtx.state === "suspended") {
+              await audioCtx.resume();
+            }
+            audioContextRef.current = audioCtx;
+            audioSampleRateRef.current = audioCtx.sampleRate;
 
-        const recorder = mimeType ? new MediaRecorder(stream, { mimeType }) : new MediaRecorder(stream);
-        mediaRecorderRef.current = recorder;
+            const source = audioCtx.createMediaStreamSource(stream);
 
-        recorder.ondataavailable = (event) => {
-          if (event.data && event.data.size > 0) {
-            audioChunksRef.current.push(event.data);
+            // Accumulate Float32 PCM samples via ScriptProcessorNode (universal cross-browser compatibility)
+            const scriptProcessor = audioCtx.createScriptProcessor(4096, 1, 1);
+            scriptProcessorRef.current = scriptProcessor;
+            scriptProcessor.onaudioprocess = (e) => {
+              if (!isRecordingRef.current) return;
+              const inputData = e.inputBuffer.getChannelData(0);
+              pcmChunksRef.current.push(new Float32Array(inputData));
+            };
+            source.connect(scriptProcessor);
+
+            // Connect script processor through a silent gain node to destination to keep processing alive
+            const silenceGain = audioCtx.createGain();
+            silenceGain.gain.value = 0;
+            scriptProcessor.connect(silenceGain);
+            silenceGain.connect(audioCtx.destination);
+
+            // Analyser for silence detection / Voice Activity Detection (VAD)
+            const analyser = audioCtx.createAnalyser();
+            analyser.fftSize = 256;
+            analyser.smoothingTimeConstant = 0.2;
+            source.connect(analyser);
+
+            const dataArray = new Uint8Array(analyser.frequencyBinCount);
+            let silenceStartTime: number | null = null;
+
+            const checkVocalActivity = () => {
+              if (!isRecordingRef.current) return;
+              analyser.getByteFrequencyData(dataArray);
+              let total = 0;
+              for (let i = 0; i < dataArray.length; i++) {
+                total += dataArray[i];
+              }
+              const averageLevel = total / dataArray.length;
+
+              // Voice activity detected
+              if (averageLevel > 6) {
+                hasSpokenRef.current = true;
+                silenceStartTime = null;
+              } else if (hasSpokenRef.current) {
+                // If user has spoken, detect pause (> 2.3 seconds) to automatically stop and transcribe
+                const now = Date.now();
+                if (!silenceStartTime) {
+                  silenceStartTime = now;
+                } else if (now - silenceStartTime > 2300) {
+                  console.log("Automatic speech pause detected, finalizing speech-to-text...");
+                  stopVoiceDictation();
+                  return;
+                }
+              }
+
+              animationFrameRef.current = requestAnimationFrame(checkVocalActivity);
+            };
+
+            animationFrameRef.current = requestAnimationFrame(checkVocalActivity);
           }
-        };
-
-        recorder.onstop = () => {
-          const audioBlob = new Blob(audioChunksRef.current, {
-            type: mimeType || "audio/webm",
-          });
-          processSarvamTranscription(audioBlob);
-        };
-
-        recorder.start(250);
+        } catch (audioCtxErr) {
+          console.warn("AudioContext setup notice:", audioCtxErr);
+        }
       }
-    } catch (micErr) {
-      console.warn("Microphone access error for MediaRecorder:", micErr);
+    } catch (micErr: any) {
+      console.warn("Microphone access error:", micErr);
+      isRecordingRef.current = false;
+      setIsRecording(false);
+      if (timerRef.current) {
+        clearInterval(timerRef.current);
+        timerRef.current = null;
+      }
+      alert(
+        micErr?.name === "NotAllowedError" || micErr?.name === "PermissionDeniedError"
+          ? "Microphone access was denied. Please allow microphone permission in your browser to use voice dictation."
+          : "Unable to access microphone. Please check your audio input device."
+      );
     }
 
-    // 2. Parallel interim live preview with browser Web Speech API (if supported)
+    // 2. Parallel real-time streaming preview via Web Speech API ONLY if natively supported by browser
     const SpeechRecognition =
       (window as any).SpeechRecognition || (window as any).webkitSpeechRecognition;
 
-    if (SpeechRecognition) {
+    const langObj = INDIAN_LANGUAGES.find(
+      (l) =>
+        l.name.toLowerCase() === selectedLanguage.toLowerCase() ||
+        l.code.toLowerCase() === selectedLanguage.toLowerCase()
+    ) || INDIAN_LANGUAGES[0];
+
+    // Language codes natively supported by Chrome Web Speech API
+    const webSpeechSupportedLangs = [
+      "en-IN", "hi-IN", "bn-IN", "ta-IN", "te-IN", "mr-IN", "gu-IN", "kn-IN", "ml-IN", "ur-IN"
+    ];
+    const isSupportedByBrowser = webSpeechSupportedLangs.includes(langObj.bcp47);
+
+    if (SpeechRecognition && isSupportedByBrowser) {
       try {
         const recognition = new SpeechRecognition();
         recognition.continuous = true;
         recognition.interimResults = true;
-
-        const langObj = INDIAN_LANGUAGES.find(
-          (l) =>
-            l.name.toLowerCase() === selectedLanguage.toLowerCase() ||
-            l.code.toLowerCase() === selectedLanguage.toLowerCase()
-        ) || INDIAN_LANGUAGES[0];
-
         recognition.lang = langObj.bcp47;
+
+        let webSpeechActive = true;
 
         recognition.onresult = (event: any) => {
           let interim = "";
           let finalChunk = "";
 
-          for (let i = event.resultIndex; i < event.results.length; i++) {
+          for (let i = 0; i < event.results.length; i++) {
             const text = event.results[i][0].transcript;
             if (event.results[i].isFinal) {
               finalChunk += text + " ";
@@ -532,22 +727,46 @@ function PatientReportSymptomsForm() {
             }
           }
 
-          if (finalChunk) {
-            baseTextRef.current = (baseTextRef.current ? baseTextRef.current.trim() + " " : "") + finalChunk.trim();
+          const liveSessionText = (finalChunk + interim).trim();
+          if (liveSessionText) {
+            hasSpokenRef.current = true;
+            currentSessionLiveTextRef.current = liveSessionText;
+            const base = previousTextBeforeRecordingRef.current.trim();
+            // Automatically write speech preview into input in real time
+            const combined = base ? `${base} ${liveSessionText}` : liveSessionText;
+            setSymptomText(combined);
           }
+        };
 
-          const currentCombined = (baseTextRef.current ? baseTextRef.current.trim() + " " : "") + interim.trim();
-          if (currentCombined.trim()) {
-            setSymptomText(currentCombined.trim());
+        recognition.onend = () => {
+          if (webSpeechActive && isRecordingRef.current && recognitionRef.current) {
+            try {
+              recognitionRef.current.start();
+            } catch {
+              webSpeechActive = false;
+            }
           }
         };
 
         recognition.onerror = (event: any) => {
-          console.warn("SpeechRecognition event:", event.error);
+          if (
+            event.error === "language-not-supported" ||
+            event.error === "not-allowed" ||
+            event.error === "service-not-allowed"
+          ) {
+            webSpeechActive = false;
+            recognitionRef.current = null;
+          } else if (event.error !== "no-speech") {
+            console.warn("SpeechRecognition event:", event.error);
+          }
         };
 
-        recognition.start();
-        recognitionRef.current = recognition;
+        try {
+          recognition.start();
+          recognitionRef.current = recognition;
+        } catch {
+          webSpeechActive = false;
+        }
       } catch (e) {
         console.warn("Web Speech preview setup notice:", e);
       }
@@ -774,9 +993,12 @@ function PatientReportSymptomsForm() {
       patient_relation: effectiveRelation,
       reported_by: user?.fullName || "Patient",
       language: selectedLanguage,
+      raw_complaint: symptomText.trim(),
+      symptom_text: symptomText.trim(),
       symptoms: extractedSymptoms,
       timeline: timeline,
       follow_up_answers: followUpAnswers,
+      follow_up_questions: followUpQuestions,
       report_data: uploadedReport && ocrData ? { ...ocrData, file_name: uploadedReport.fileName } : null,
       report_answers: reportInquiryAnswers,
       facility_id: selectedFacilityId || null,
@@ -864,9 +1086,12 @@ function PatientReportSymptomsForm() {
       patient_relation: effectiveRelation,
       reported_by: user?.fullName || "Patient",
       language: selectedLanguage,
+      raw_complaint: symptomText.trim(),
+      symptom_text: symptomText.trim(),
       symptoms: extractedSymptoms.length > 0 ? extractedSymptoms : (symptomText ? [symptomText] : ["General symptoms intake"]),
       timeline: timeline,
       follow_up_answers: followUpAnswers,
+      follow_up_questions: followUpQuestions,
       report_data: uploadedReport && ocrData ? { ...ocrData, file_name: uploadedReport.fileName } : null,
       report_answers: reportInquiryAnswers,
       facility_id: selectedFacilityId || null,
@@ -935,7 +1160,7 @@ function PatientReportSymptomsForm() {
       <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 border-b border-slate-200 pb-4">
         <div>
           <h1 className="text-2xl sm:text-3xl font-black text-slate-900 tracking-tight">
-            Report Your Symptoms
+            Book Appointment
           </h1>
           <p className="text-xs sm:text-sm text-slate-600 mt-0.5">
             5-step guided clinical evaluation with real-time laboratory OCR and nearest PHC triage routing.
@@ -1055,7 +1280,7 @@ function PatientReportSymptomsForm() {
           {step === 1 && (
             <Step1Symptoms
               selectedLanguage={selectedLanguage}
-              setSelectedLanguage={setSelectedLanguage}
+              setSelectedLanguage={handleSelectLanguage}
               familyMembers={familyMembers}
               selectedMemberId={selectedMemberId}
               setSelectedMemberId={setSelectedMemberId}

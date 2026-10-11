@@ -154,7 +154,7 @@ export const AdminAuthSection: React.FC<AdminAuthSectionProps> = ({
             required
             value={email}
             onChange={(e) => setEmail(e.target.value)}
-            placeholder="user@triageassist.org"
+            placeholder="user@traaya.org"
             className="w-full bg-slate-900 border border-slate-700 rounded-xl px-3.5 py-2 text-xs sm:text-sm text-white placeholder-slate-500 focus:outline-none focus:border-teal-400"
           />
         </div>

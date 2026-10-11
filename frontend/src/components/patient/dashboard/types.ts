@@ -4,6 +4,20 @@ import { CareReminder, ReminderStats } from "@/components/patient/reminders";
 export { normalizeStatus };
 export type { TriageTicket, CareReminder, ReminderStats };
 
+export interface PatientVitalLog {
+  id?: string;
+  patient_id?: string;
+  ticket_id?: string | null;
+  systolic?: number | null;
+  diastolic?: number | null;
+  pulse?: number | null;
+  spo2?: number | null;
+  blood_sugar?: number | null;
+  temperature?: number | string | null;
+  notes?: string | null;
+  logged_at?: string;
+}
+
 export const formatDate = (isoStr?: string): string => {
   if (!isoStr) return "Recent";
   try {

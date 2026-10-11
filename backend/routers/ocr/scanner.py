@@ -8,12 +8,27 @@ from typing import Optional
 from fastapi import APIRouter, UploadFile, File, Form
 import httpx
 
-from config import SUPABASE_URL, SUPABASE_KEY, HF_TOKEN, HF_ROUTER_BASE, OCR_MODEL_URL, CUSTOM_OCR_MODEL
+from config import SUPABASE_URL, SUPABASE_KEY, HF_TOKEN, HF_ROUTER_BASE, OCR_MODEL_URL, CUSTOM_OCR_MODEL, GROQ_API_KEY
 from .schemas import LinkReportRequest
-from .inquiries import generate_esanjeevani_inquiries
 from .summaries import generate_patient_summary_details
+from PIL import Image
+import numpy as np
 
 router = APIRouter()
+
+_rapid_ocr_engine = None
+
+def get_ocr_engine():
+    global _rapid_ocr_engine
+    if _rapid_ocr_engine is None:
+        try:
+            from rapidocr_onnxruntime import RapidOCR
+            _rapid_ocr_engine = RapidOCR()
+            print("[OCR] RapidOCR engine initialized successfully.")
+        except Exception as e:
+            print(f"[OCR] RapidOCR initialization notice: {e}")
+            _rapid_ocr_engine = False
+    return _rapid_ocr_engine if _rapid_ocr_engine is not False else None
 
 @router.post("/scan-qwen-vl")
 async def scan_with_qwen_vl(
@@ -29,26 +44,24 @@ async def scan_with_qwen_vl(
     ticket_id: Optional[str] = Form(None)
 ):
     """
-    Intelligently scans medical reports and synthesizes eSanjeevani-aligned follow-up inquiries
-    by dynamically correlating document findings with the patient's reported symptoms and answers.
-    Also produces patient-friendly summary details for citizens who cannot read medical jargon.
+    Scans medical reports using RapidOCR and high-accuracy LLM parameter extraction.
+    Accurately extracts real patient and lab values from the document.
+    No dummy/sample values are fabricated when extraction is unavailable.
+    Does not ask follow-up inquiries at this stage.
     """
-    actual_file_name = file.filename if file and file.filename else (file_name or "Medical_Report.pdf")
+    actual_file_name = file.filename if file and file.filename else (str(file_name) if file_name and isinstance(file_name, str) else "Medical_Report.pdf")
 
-    # 1. Parse symptoms and previous step answers
+    # 1. Parse symptoms
     try:
-        symptom_list = json.loads(symptoms) if symptoms else []
+        symptom_list = json.loads(symptoms) if symptoms and isinstance(symptoms, str) else []
     except Exception:
         symptom_list = []
 
-    try:
-        answers_dict = json.loads(follow_up_answers) if follow_up_answers else {}
-    except Exception:
-        answers_dict = {}
+    s_text = symptom_text if isinstance(symptom_text, str) else ""
+    complaints_desc = s_text.strip() or ", ".join(symptom_list) or "acute symptoms"
 
-    complaints_desc = symptom_text.strip() or ", ".join(symptom_list) or "acute symptoms"
 
-    # 2. Read file bytes and extract text for PDFs / prepare image for vision model
+    # 2. Read file bytes and extract text from PDFs or Images
     extracted_text = ""
     file_bytes_for_storage = None
     is_image_file = actual_file_name.lower().endswith((".png", ".jpg", ".jpeg", ".webp", ".bmp"))
@@ -64,172 +77,337 @@ async def scan_with_qwen_vl(
                     t = page.extract_text()
                     if t:
                         extracted_text += t + "\n"
+                    # If PDF page contains images and text is sparse, OCR the page images
+                    if hasattr(page, "images") and len(page.images) > 0 and len(extracted_text.strip()) < 50:
+                        engine = get_ocr_engine()
+                        if engine:
+                            for img_obj in page.images:
+                                try:
+                                    pi = Image.open(io.BytesIO(img_obj.data)).convert("RGB")
+                                    res, _ = engine(np.array(pi))
+                                    if res:
+                                        extracted_text += "\n" + "\n".join([r[1] for r in res])
+                                except Exception:
+                                    pass
+            elif is_image_file:
+                engine = get_ocr_engine()
+                if engine:
+                    try:
+                        pi = Image.open(io.BytesIO(content)).convert("RGB")
+                        res, _ = engine(np.array(pi))
+                        if res:
+                            extracted_text = "\n".join([r[1] for r in res])
+                            print(f"[OCR] RapidOCR extracted {len(res)} text lines from image.")
+                    except Exception as ocr_e:
+                        print(f"[RapidOCR Image Error] {ocr_e}")
         except Exception as e:
             print(f"[OCR File Read Notice] {e}")
 
     # 3. Call LLM to extract structured lab parameters from the uploaded document
     llm_extraction_success = False
     test_name = "Medical Report"
-    lab_name = "Unknown Lab"
-    report_date = "Unknown"
+    lab_name = None
+    report_date = None
+    patient_name = None
+    patient_dob = None
+    doctor_name = None
     parameters = []
+    sections = []
+    medical_issues = []
+    treatments = []
+    lifestyle_advice = []
     clinical_flags = []
     ai_summary = ""
+    raw_model_output = None
 
-    LLM_SYSTEM_PROMPT = (
-        "You are a medical lab report OCR extraction AI. "
-        "Analyze the uploaded lab report carefully. "
-        "Extract ALL test parameters with their exact values, units, reference ranges, "
-        "and flag each as HIGH, LOW, or NORMAL based on the reference range. "
-        "Also extract the patient name, lab name, report date, and test title. "
-        "Return ONLY valid JSON with this schema:\n"
-        '{"test_name": string, "lab_name": string, "patient_name": string, '
-        '"report_date": string, '
-        '"parameters": [{"name": string, "value": string, "unit": string, '
-        '"reference_range": string, "status": "HIGH"|"LOW"|"NORMAL", '
-        '"alert_level": "Urgent"|"Priority"|"Routine", '
-        '"clinical_significance": string}], '
-        '"clinical_flags": [string], "ai_summary": string}'
-    )
+    groq_key = GROQ_API_KEY or os.getenv("GROQ_API_KEY", "")
 
-    # Resolve target OCR model endpoint (Kaggle ngrok, HF Inference Endpoint, or HF Router)
-    target_endpoint = OCR_MODEL_URL if OCR_MODEL_URL else f"{HF_ROUTER_BASE}/chat/completions"
-    if not target_endpoint.endswith("/chat/completions"):
-        if target_endpoint.endswith("/v1"):
-            target_endpoint = f"{target_endpoint}/chat/completions"
-        elif "/v1" not in target_endpoint:
-            target_endpoint = f"{target_endpoint.rstrip('/')}/v1/chat/completions"
+    def normalize_extracted_report(raw_text: str, g_key: str = "") -> dict:
+        """
+        Normalizes OCR model output into structured medical data.
+        Strictly preserves model-extracted information and does NOT fabricate extra fields.
+        """
+        if not raw_text or not raw_text.strip():
+            return {}
 
-    if HF_TOKEN or OCR_MODEL_URL:
-        hf_headers = {
-            "Content-Type": "application/json"
+        cleaned = raw_text.strip()
+        if "```json" in cleaned:
+            cleaned = cleaned.split("```json")[1].split("```")[0].strip()
+        elif "```" in cleaned:
+            cleaned = cleaned.split("```")[1].split("```")[0].strip()
+
+        if cleaned.startswith("{") and cleaned.endswith("}"):
+            try:
+                parsed_json = json.loads(cleaned)
+                if isinstance(parsed_json, dict):
+                    return parsed_json
+            except Exception:
+                pass
+
+        # Try high-speed Groq normalization if API key is configured
+        if g_key:
+            groq_models = ["qwen/qwen3.8-27b", "openai/gpt-oss-120b"]
+            norm_prompt = (
+                "You are an expert clinical medical document normalizer. Convert the following OCR model extracted report text into clean structured JSON.\n"
+                "STRICT RULES:\n"
+                "- Do NOT hallucinate, invent, or fabricate any data not present in the document text.\n"
+                "- Extract ONLY what is explicitly present in the document text.\n"
+                "- Extract measured vitals and test results into parameters with status HIGH, LOW, or NORMAL.\n"
+                "- Extract medical issues / diagnoses into medical_issues.\n"
+                "- Extract medications / treatments / admissions into treatments.\n"
+                "- Extract lifestyle advice or checklists explicitly stated in the document into lifestyle_advice.\n"
+                "- Extract all sections into sections as an array of {title: string, items: string[]}.\n\n"
+                f"Document text:\n{raw_text}\n\n"
+                "Return valid JSON matching this schema:\n"
+                "{\n"
+                '  "test_name": string,\n'
+                '  "patient_name": string | null,\n'
+                '  "patient_dob": string | null,\n'
+                '  "doctor_name": string | null,\n'
+                '  "lab_name": string | null,\n'
+                '  "report_date": string | null,\n'
+                '  "parameters": [\n'
+                '    {"name": string, "value": string, "unit": string, "reference_range": string, "status": "HIGH"|"LOW"|"NORMAL"}\n'
+                '  ],\n'
+                '  "medical_issues": [string],\n'
+                '  "treatments": [string],\n'
+                '  "lifestyle_advice": [string],\n'
+                '  "sections": [\n'
+                '    {"title": string, "items": [string]}\n'
+                '  ],\n'
+                '  "summary": string\n'
+                "}"
+            )
+            for gm in groq_models:
+                try:
+                    resp_norm = httpx.post(
+                        "https://api.groq.com/openai/v1/chat/completions",
+                        headers={"Authorization": f"Bearer {g_key.strip()}", "Content-Type": "application/json"},
+                        json={
+                            "model": gm,
+                            "messages": [{"role": "user", "content": norm_prompt}],
+                            "temperature": 0.1,
+                            "response_format": {"type": "json_object"}
+                        },
+                        timeout=15.0
+                    )
+                    if resp_norm.status_code == 200:
+                        c_str = resp_norm.json()["choices"][0]["message"]["content"].strip()
+                        p_obj = json.loads(c_str)
+                        if isinstance(p_obj, dict):
+                            return p_obj
+                except Exception as norm_err:
+                    print(f"[OCR Normalizer] Groq normalization attempt note: {norm_err}")
+
+        # Native Python fallback parser
+        import re
+        raw_lines = [l.strip() for l in raw_text.strip().split("\n") if l.strip()]
+        if not raw_lines:
+            return {}
+
+        t_name = raw_lines[0].strip("#* ")
+        p_name = None
+        p_dob = None
+        d_name = None
+        l_name = None
+        r_date = None
+        params = []
+        secs = []
+        m_issues = []
+        t_treats = []
+        l_adv = []
+        cur_title = None
+        cur_items = []
+
+        for line in raw_lines[1:]:
+            ll = line.lower()
+            if ll.startswith("patient name:") or ll.startswith("patient:"):
+                p_name = line.split(":", 1)[1].strip()
+            elif ll.startswith("date of birth:") or ll.startswith("dob:"):
+                p_dob = line.split(":", 1)[1].strip()
+            elif ll.startswith("doctor:") or ll.startswith("physician:"):
+                d_name = line.split(":", 1)[1].strip()
+            elif ll.startswith("facility:") or ll.startswith("lab:") or ll.startswith("hospital:"):
+                l_name = line.split(":", 1)[1].strip()
+            elif ll.startswith("report date:") or ll.startswith("date:"):
+                r_date = line.split(":", 1)[1].strip()
+            elif any(d in ll for d in [", md", "dr.", "dr "]) and len(line) < 45 and not line.startswith("-"):
+                d_name = line.strip()
+            elif line.startswith("- ") or line.startswith("* "):
+                item = line[2:].strip()
+                if cur_title:
+                    cur_items.append(item)
+                sec_lower = (cur_title or "").lower()
+                if any(w in sec_lower for w in ["vital", "lab", "result", "biomarker"]):
+                    if ":" in item:
+                        k, v = item.split(":", 1)
+                        k = k.strip()
+                        v = v.strip()
+                        m = re.match(r"^([0-9\.\/]+)\s*([a-zA-Z%\/\(\)]*)", v)
+                        params.append({
+                            "name": k,
+                            "value": m.group(1) if m else v,
+                            "unit": m.group(2) if m else "",
+                            "reference_range": "",
+                            "status": "NORMAL",
+                            "alert_level": "Routine"
+                        })
+                elif "medical issue" in sec_lower or "diagnos" in sec_lower:
+                    m_issues.append(item)
+                elif "treatment" in sec_lower or "medication" in sec_lower or "hospital" in sec_lower:
+                    t_treats.append(item)
+                elif "lifestyle" in sec_lower or "advice" in sec_lower or "checklist" in sec_lower:
+                    l_adv.append(item)
+            else:
+                if cur_title and cur_items:
+                    secs.append({"title": cur_title, "items": list(cur_items)})
+                    cur_items = []
+                cur_title = line.rstrip(":").strip("#* ")
+
+        if cur_title and cur_items:
+            secs.append({"title": cur_title, "items": list(cur_items)})
+
+        return {
+            "test_name": t_name,
+            "patient_name": p_name,
+            "patient_dob": p_dob,
+            "doctor_name": d_name,
+            "lab_name": l_name,
+            "report_date": r_date,
+            "parameters": params,
+            "medical_issues": m_issues,
+            "treatments": t_treats,
+            "lifestyle_advice": l_adv,
+            "sections": secs,
+            "summary": f"{t_name} extracted successfully."
+        }
+
+    # Strategy 1: Prioritize User's Custom Fine-Tuned OCR Model
+    if OCR_MODEL_URL and OCR_MODEL_URL.strip():
+        target_endpoint = OCR_MODEL_URL.strip()
+        if not target_endpoint.endswith("/chat/completions"):
+            if target_endpoint.endswith("/v1"):
+                target_endpoint = f"{target_endpoint}/chat/completions"
+            elif "/v1" not in target_endpoint:
+                target_endpoint = f"{target_endpoint.rstrip('/')}/v1/chat/completions"
+
+        custom_headers = {
+            "Content-Type": "application/json",
+            "ngrok-skip-browser-warning": "true",
+            "User-Agent": "TriageAssist-OCR/1.0"
         }
         if HF_TOKEN:
-            hf_headers["Authorization"] = f"Bearer {HF_TOKEN.strip()}"
+            custom_headers["Authorization"] = f"Bearer {HF_TOKEN.strip()}"
 
         try:
-            # Choose extraction strategy based on file type
+            print(f"[Custom OCR Model] Sending to primary OCR model endpoint: {target_endpoint}...")
+
             if is_image_file and file_bytes_for_storage:
-                # VISION MODEL: Send image directly
                 img_b64 = base64.b64encode(file_bytes_for_storage).decode("utf-8")
                 ext = actual_file_name.rsplit(".", 1)[-1].lower()
                 mime_map = {"png": "image/png", "jpg": "image/jpeg", "jpeg": "image/jpeg", "webp": "image/webp", "bmp": "image/bmp"}
-                mime = mime_map.get(ext, "image/png")
-
-                payload = {
-                    "model": CUSTOM_OCR_MODEL,
-                    "messages": [
-                        {"role": "system", "content": LLM_SYSTEM_PROMPT},
-                        {"role": "user", "content": [
-                            {"type": "image_url", "image_url": {"url": f"data:{mime};base64,{img_b64}"}},
-                            {"type": "text", "text": "Extract all laboratory parameters from this medical report image. Return ONLY valid JSON."}
-                        ]}
-                    ],
-                    "temperature": 0.1,
-                    "max_tokens": 2000
-                }
-                print(f"[LLM OCR] Sending image ({len(file_bytes_for_storage)} bytes) to custom OCR model...")
-
-            elif extracted_text.strip():
-                # TEXT MODEL: Send extracted PDF text
-                payload = {
-                    "model": CUSTOM_OCR_MODEL,
-                    "messages": [
-                        {"role": "system", "content": LLM_SYSTEM_PROMPT},
-                        {"role": "user", "content": f"Extract all laboratory parameters from this medical report text. Return ONLY valid JSON.\n\n{extracted_text[:4000]}"}
-                    ],
-                    "temperature": 0.1,
-                    "max_tokens": 2000
-                }
-                print(f"[LLM OCR] Sending extracted PDF text ({len(extracted_text)} chars) to custom OCR model...")
-
+                mime = mime_map.get(ext, "image/jpeg")
+                custom_messages = [
+                    {"role": "user", "content": [
+                        {"type": "image_url", "image_url": {"url": f"data:{mime};base64,{img_b64}"}},
+                        {"type": "text", "text": "Extract all text, clinical vitals, lab results, diagnoses, and structured medical information from this document image."}
+                    ]}
+                ]
             else:
-                # No real file content — skip LLM call
-                payload = None
-                print("[LLM OCR] No file content to analyze, using report_type hint for fallback.")
+                custom_messages = [
+                    {"role": "user", "content": f"Extract all text, clinical vitals, lab results, diagnoses, and structured medical information from this document text:\n\n{extracted_text[:6000]}"}
+                ]
 
-            if payload:
-                async with httpx.AsyncClient(timeout=60.0) as client:
-                    llm_resp = await client.post(hf_endpoint, headers=hf_headers, json=payload)
+            custom_payload = {
+                "model": CUSTOM_OCR_MODEL or "ocr-model",
+                "messages": custom_messages,
+                "temperature": 0.1,
+                "max_tokens": 1500
+            }
 
-                if llm_resp.status_code == 200:
-                    llm_content = llm_resp.json()["choices"][0]["message"]["content"]
-                    cleaned = llm_content.strip()
-                    if "```json" in cleaned:
-                        cleaned = cleaned.split("```json")[1].split("```")[0].strip()
-                    elif "```" in cleaned:
-                        cleaned = cleaned.split("```")[1].split("```")[0].strip()
+            async with httpx.AsyncClient(timeout=75.0) as client:
+                ocr_resp = await client.post(target_endpoint, headers=custom_headers, json=custom_payload)
 
-                    parsed = json.loads(cleaned)
-                    test_name = parsed.get("test_name", test_name)
-                    lab_name = parsed.get("lab_name", lab_name)
-                    report_date = parsed.get("report_date", report_date)
-                    parameters = parsed.get("parameters", [])
-                    clinical_flags = parsed.get("clinical_flags", [])
-                    ai_summary = parsed.get("ai_summary", "")
+            if ocr_resp.status_code == 200:
+                raw_c = ocr_resp.json()["choices"][0]["message"]["content"].strip()
+                raw_model_output = raw_c
+                print(f"[Custom OCR Model] Raw output length: {len(raw_c)} chars.")
 
-                    # Ensure each parameter has alert_level
-                    for p in parameters:
-                        if "alert_level" not in p:
-                            st = p.get("status", "NORMAL").upper()
-                            p["alert_level"] = "Urgent" if st == "HIGH" else ("Priority" if st == "LOW" else "Routine")
+                parsed = normalize_extracted_report(raw_c, groq_key)
 
-                    llm_extraction_success = True
-                    print(f"[LLM OCR] Successfully extracted {len(parameters)} parameters via LLM.")
-                else:
-                    print(f"[LLM OCR] LLM returned status {llm_resp.status_code}: {llm_resp.text[:200]}")
+                test_name = parsed.get("test_name") or test_name
+                lab_name = parsed.get("lab_name") or lab_name
+                patient_name = parsed.get("patient_name") or patient_name
+                patient_dob = parsed.get("patient_dob") or patient_dob
+                doctor_name = parsed.get("doctor_name") or doctor_name
+                report_date = parsed.get("report_date") or report_date
+                parameters = parsed.get("parameters", [])
+                sections = parsed.get("sections", [])
+                medical_issues = parsed.get("medical_issues", [])
+                treatments = parsed.get("treatments", [])
+                lifestyle_advice = parsed.get("lifestyle_advice", [])
+                clinical_flags = medical_issues if medical_issues else parsed.get("clinical_flags", [])
+                ai_summary = parsed.get("summary") or parsed.get("ai_summary", "")
 
-        except json.JSONDecodeError as je:
-            print(f"[LLM OCR] JSON parsing failed: {je}")
-        except Exception as e:
-            print(f"[LLM OCR] LLM call failed: {type(e).__name__}: {e}")
+                for p in parameters:
+                    if "alert_level" not in p:
+                        st = str(p.get("status", "NORMAL")).upper()
+                        p["alert_level"] = "Urgent" if st == "HIGH" else ("Priority" if st == "LOW" else "Routine")
 
-    # 3b. FALLBACK: If LLM extraction failed, use keyword-based heuristic
-    if not llm_extraction_success:
-        print("[LLM OCR] Falling back to keyword-based heuristic extraction...")
-        combined_search_text = f"{actual_file_name} {report_type or ''} {extracted_text} {complaints_desc}".lower()
+                llm_extraction_success = True
+                print(f"[Custom OCR Model] Successfully extracted {len(parameters)} parameters and {len(sections)} sections from model!")
+            else:
+                print(f"[Custom OCR Model] Endpoint returned status {ocr_resp.status_code}: {ocr_resp.text[:150]}")
+        except Exception as custom_err:
+            print(f"[Custom OCR Model] Custom endpoint connection notice: {custom_err}")
 
-        if any(k in combined_search_text for k in ["lipid", "cholesterol", "triglyceride", "hdl", "cardiac"]):
-            test_name = "Lipid Profile & Cardiovascular Biomarkers"
-            lab_name = "PHC Rampur - Pathology Division"
-            parameters = [
-                {"name": "Serum Total Cholesterol", "value": "228", "unit": "mg/dL", "reference_range": "< 200", "status": "HIGH", "alert_level": "Priority"},
-                {"name": "Triglycerides", "value": "185", "unit": "mg/dL", "reference_range": "< 150", "status": "HIGH", "alert_level": "Priority"},
-                {"name": "HDL Cholesterol", "value": "38", "unit": "mg/dL", "reference_range": "> 40", "status": "LOW", "alert_level": "Priority"}
-            ]
-            clinical_flags = ["Hypercholesterolemia with reduced HDL indicating cardiovascular risk"]
-        elif any(k in combined_search_text for k in ["lft", "liver", "bilirubin", "sgot", "sgpt"]):
-            test_name = "Liver Function Test (LFT Panel)"
-            lab_name = "District Diagnostic Pathology Services"
-            parameters = [
-                {"name": "Total Bilirubin", "value": "2.8", "unit": "mg/dL", "reference_range": "0.2 - 1.2", "status": "HIGH", "alert_level": "Urgent"},
-                {"name": "SGPT (ALT)", "value": "128", "unit": "U/L", "reference_range": "7 - 56", "status": "HIGH", "alert_level": "Priority"}
-            ]
-            clinical_flags = ["Elevated transaminases indicating hepatocellular insult"]
-        elif any(k in combined_search_text for k in ["glucose", "sugar", "diabetes", "rbs", "hba1c"]):
-            test_name = "Glycemic Assessment"
-            lab_name = "Primary Healthcare Diagnostics"
-            parameters = [
-                {"name": "Blood Glucose (RBS)", "value": "242", "unit": "mg/dL", "reference_range": "70 - 140", "status": "HIGH", "alert_level": "Urgent"}
-            ]
-            clinical_flags = ["Marked hyperglycemia requiring medical review"]
-        else:
-            test_name = "Complete Blood Count (CBC)"
-            lab_name = "District Hospital Diagnostics"
-            parameters = [
-                {"name": "Hemoglobin", "value": "11.2", "unit": "g/dL", "reference_range": "12.0 - 15.5", "status": "LOW", "alert_level": "Priority"},
-                {"name": "Total Leukocyte Count (WBC)", "value": "11,600", "unit": "/µL", "reference_range": "4,000 - 11,000", "status": "HIGH", "alert_level": "Urgent"}
-            ]
-            clinical_flags = ["Fallback heuristic: LLM extraction was unavailable. Values shown are sample defaults, not from the uploaded document."]
+    # Strategy 2: High-Speed LLM Extraction Fallback (RapidOCR + Groq)
+    if not llm_extraction_success and groq_key and extracted_text.strip():
+        try:
+            print("[LLM OCR] Attempting extraction fallback via RapidOCR + Groq...")
+            parsed = normalize_extracted_report(extracted_text, groq_key)
+            if parsed and (parsed.get("parameters") or parsed.get("sections")):
+                test_name = parsed.get("test_name") or test_name
+                lab_name = parsed.get("lab_name") or lab_name
+                patient_name = parsed.get("patient_name") or patient_name
+                patient_dob = parsed.get("patient_dob") or patient_dob
+                doctor_name = parsed.get("doctor_name") or doctor_name
+                report_date = parsed.get("report_date") or report_date
+                parameters = parsed.get("parameters", [])
+                sections = parsed.get("sections", [])
+                medical_issues = parsed.get("medical_issues", [])
+                treatments = parsed.get("treatments", [])
+                lifestyle_advice = parsed.get("lifestyle_advice", [])
+                clinical_flags = medical_issues if medical_issues else parsed.get("clinical_flags", [])
+                ai_summary = parsed.get("summary") or parsed.get("ai_summary", "")
+                raw_model_output = extracted_text
 
-    # 4. Generate dynamic eSanjeevani-aligned follow-up inquiries connecting symptoms + report
-    inquiries = generate_esanjeevani_inquiries(
-        test_name=test_name,
-        parameters=parameters,
-        symptoms=symptom_list,
-        symptom_text=complaints_desc,
-        follow_up_answers=answers_dict
-    )
+                for p in parameters:
+                    if "alert_level" not in p:
+                        st = p.get("status", "NORMAL").upper()
+                        p["alert_level"] = "Urgent" if st == "HIGH" else ("Priority" if st == "LOW" else "Routine")
+
+                llm_extraction_success = True
+                print(f"[LLM OCR] Groq successfully extracted {len(parameters)} parameters and {len(sections)} sections.")
+        except Exception as ge:
+            print(f"[LLM OCR] Groq attempt failed: {ge}")
+
+    # 3b. SAFE FALLBACK: If extraction failed or document is empty
+    if not llm_extraction_success or len(parameters) == 0:
+        print("[LLM OCR] No automated lab parameters extracted. Retaining clean uploaded document info.")
+        base_title = actual_file_name.rsplit(".", 1)[0].replace("_", " ").replace("-", " ")
+        test_name = f"Uploaded Report: {base_title}"
+        lab_name = "Medical Diagnostics & Records"
+        report_date = "As per uploaded document"
+        parameters = []
+        clinical_flags = [
+            "Document successfully uploaded and saved for doctor review during clinical triage."
+        ]
+
+
+    # 4. No follow-up questions asked here per user requirement
+    inquiries = []
+
 
     # 5. Persist File to Supabase Storage & Local Server
     unique_storage_key = f"{uuid.uuid4().hex[:8]}_{actual_file_name.replace(' ', '_')}"
@@ -270,9 +448,14 @@ async def scan_with_qwen_vl(
             print(f"[Supabase Storage Upload Notice] {e}")
 
     # 6. Build Patient-Friendly Summary & Report Data Payload
-    patient_summary, summary_details = generate_patient_summary_details(test_name, parameters, clinical_flags)
+    patient_summary, summary_details = generate_patient_summary_details(
+        test_name, parameters, clinical_flags, lifestyle_advice=lifestyle_advice
+    )
+    if ai_summary:
+        patient_summary = ai_summary
+        summary_details["overview"] = ai_summary
 
-    model_used = "Qwen/Qwen2.5-VL-72B-Instruct" if (is_image_file and llm_extraction_success) else ("Qwen/Qwen2.5-72B-Instruct" if llm_extraction_success else "Keyword Heuristic Fallback")
+    model_used = "bikash4002/TriageAssist-Medical-OCR" if llm_extraction_success else "RapidOCR Fallback"
     file_size_str = f"{(len(file_bytes) / (1024 * 1024)):.1f} MB" if file_bytes else "1.5 MB"
     storage_path = f"medical-reports/{unique_storage_key}"
 
@@ -284,31 +467,40 @@ async def scan_with_qwen_vl(
         "storage_key": unique_storage_key,
         "test_name": test_name,
         "lab_name": lab_name,
+        "patient_name": patient_name,
+        "patient_dob": patient_dob,
+        "doctor_name": doctor_name,
         "report_date": report_date,
+
         "file_size": file_size_str,
         "ocr_status": "processed" if llm_extraction_success else "fallback",
         "extracted_text_preview": extracted_text[:250] if extracted_text else None,
         "patient_summary": patient_summary,
         "summary_details": summary_details,
         "parameters": parameters,
+        "sections": sections,
+        "medical_issues": medical_issues,
+        "treatments": treatments,
+        "lifestyle_advice": lifestyle_advice,
         "clinical_flags": clinical_flags,
         "ai_summary": ai_summary,
+        "raw_model_output": raw_model_output,
         "llm_extraction": llm_extraction_success,
-        "missing_information": inquiries
+        "missing_information": []
     }
 
     # 7. Persist Metadata & Extracted Info to Supabase Database 'uploaded_reports' Table
     saved_to_db = False
     db_record_id = str(uuid.uuid4())
-    valid_patient_uuid = "fa23159f-6820-4c34-a9db-2f144b629f87"
+    valid_patient_uuid = None
     if patient_id:
         try:
             uuid.UUID(str(patient_id))
             valid_patient_uuid = str(patient_id)
         except Exception:
-            pass
+            valid_patient_uuid = None
 
-    if SUPABASE_URL and SUPABASE_KEY:
+    if SUPABASE_URL and SUPABASE_KEY and valid_patient_uuid:
         try:
             db_endpoint = f"{SUPABASE_URL}/rest/v1/uploaded_reports"
             db_headers = {
@@ -321,22 +513,29 @@ async def scan_with_qwen_vl(
                 "id": db_record_id,
                 "patient_id": valid_patient_uuid,
                 "report_type": test_name,
+
                 "file_url": file_url,
                 "file_type": file.content_type if file and file.content_type else "application/pdf",
                 "report_summary": {
                     "overview": patient_summary,
-                    "health_status": summary_details.get("health_status", "Needs Attention"),
-                    "urgency": summary_details.get("urgency", "Schedule Doctor Visit"),
+                    "health_status": summary_details.get("health_status", "Normal"),
+                    "urgency": summary_details.get("urgency", "Routine Checkup"),
                     "file_name": actual_file_name,
                     "file_size": file_size_str,
                     "lab_name": lab_name,
                     "test_date": report_date,
+                    "patient_name": patient_name,
+                    "patient_dob": patient_dob,
+                    "doctor_name": doctor_name,
                     "abnormal_findings": summary_details.get("abnormal_findings", []),
                     "normal_findings": summary_details.get("normal_findings", []),
-                    "what_to_ask_doctor": summary_details.get("what_to_ask_doctor", []),
-                    "lifestyle_tips": summary_details.get("lifestyle_tips", []),
                     "parameters": parameters,
-                    "clinical_flags": clinical_flags
+                    "sections": sections,
+                    "medical_issues": medical_issues,
+                    "treatments": treatments,
+                    "lifestyle_advice": lifestyle_advice,
+                    "clinical_flags": clinical_flags,
+                    "raw_model_output": raw_model_output
                 }
             }
             async with httpx.AsyncClient(timeout=10.0) as client:

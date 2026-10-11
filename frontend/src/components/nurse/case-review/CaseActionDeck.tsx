@@ -2,7 +2,6 @@
 
 import React from "react";
 import {
-  Info,
   Lock,
   Stethoscope,
   Calendar,
@@ -99,19 +98,6 @@ export function CaseActionDeck({
           <p className="text-xs text-slate-500 mt-0.5">
             Take appropriate action after reviewing the case.
           </p>
-        </div>
-
-        {/* Role Disclaimer Box */}
-        <div className="p-3.5 bg-sky-50/70 border border-sky-200/80 rounded-2xl flex items-start gap-2.5 text-xs text-sky-950">
-          <Info className="w-4 h-4 text-sky-600 shrink-0 mt-0.5" />
-          <div>
-            <strong className="font-bold block text-sky-900">
-              Your Role: Nurse
-            </strong>
-            <span className="leading-relaxed text-[11px] text-sky-900/90">
-              You can review, request more information, add notes, and forward to authorized professionals. You cannot finalize diagnosis.
-            </span>
-          </div>
         </div>
 
         {/* Select Action List */}

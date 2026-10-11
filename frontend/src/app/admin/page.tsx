@@ -239,7 +239,7 @@ export default function AdminRegistrationPage() {
       setFullName("Dr. Ramesh Chandra Mohanty");
       setUserId(docCode);
       setPhone(randomPhone);
-      setEmail(`dr.ramesh.${randomSuffix}@triageassist.org`);
+      setEmail(`dr.ramesh.${randomSuffix}@traaya.org`);
       setGender("male");
       setDob("1984-08-22");
       setAge(40);
@@ -260,7 +260,7 @@ export default function AdminRegistrationPage() {
       setUserId(nurCode);
       setStaffId(nurCode);
       setPhone(randomPhone);
-      setEmail(`sarita.nurse.${randomSuffix}@triageassist.org`);
+      setEmail(`sarita.nurse.${randomSuffix}@traaya.org`);
       setGender("female");
       setDob("1992-11-05");
       setAge(32);
@@ -274,7 +274,7 @@ export default function AdminRegistrationPage() {
       setFullName("Jan Aushadhi Kendra & CHC Pathology Counter");
       setUserId(medCode);
       setPhone(randomPhone);
-      setEmail(`facility.khandapada.${randomSuffix}@triageassist.org`);
+      setEmail(`facility.khandapada.${randomSuffix}@traaya.org`);
       setGender("other");
       setDob("");
       setAge("");
@@ -314,13 +314,13 @@ export default function AdminRegistrationPage() {
       setLeadOfficer("Dr. S. Mohapatra (MO I/C)");
       setOperationalStatus("Active");
       setPhone(randomPhone);
-      setEmail(`mmu.nayagarh.${randomSuffix}@triageassist.org`);
+      setEmail(`mmu.nayagarh.${randomSuffix}@traaya.org`);
     } else if (activeRole === "admin") {
       const admCode = `ADM-${randomSuffix}`;
       setFullName("Clinical System Administrator");
       setUserId(admCode);
       setPhone(randomPhone);
-      setEmail(`admin.${randomSuffix}@triageassist.gov.in`);
+      setEmail(`admin.${randomSuffix}@traaya.gov.in`);
       setGender("other");
       setDob("1986-07-14");
       setAge(38);

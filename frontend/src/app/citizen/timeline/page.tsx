@@ -15,7 +15,6 @@ import {
   TriageEncounterStatus,
   normalizeStatus,
   TimelineHeader,
-  TimelineStatsCards,
   TimelineFilterBar,
   TimelineTable,
 } from "@/components/patient/timeline";
@@ -235,7 +234,7 @@ export default function PatientTimelinePage() {
         }
       }
     }
-    const cc = ticket.symptoms_data?.chief_complaint || ticket.chief_complaint;
+    const cc = ticket.symptoms_data?.raw_complaint || ticket.symptoms_data?.chief_complaint || ticket.chief_complaint || ticket.symptoms_data?.summary;
     if (list.length === 0 && cc?.trim()) {
       list.push(cc.trim());
     }
@@ -266,14 +265,6 @@ export default function PatientTimelinePage() {
     <div className="space-y-6 max-w-7xl mx-auto">
       {/* Title & Actions Header */}
       <TimelineHeader />
-
-      {/* Summary Stat Cards */}
-      <TimelineStatsCards
-        stats={stats}
-        activeStatusFilter={activeStatusFilter}
-        setActiveStatusFilter={setActiveStatusFilter}
-        loading={loading}
-      />
 
       {/* Filter & Search Bar */}
       <TimelineFilterBar

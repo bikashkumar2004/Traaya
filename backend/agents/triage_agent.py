@@ -5,6 +5,7 @@ to guide patients through a 10-step doctor anamnesis protocol.
 """
 
 import json
+import re
 from datetime import datetime, timedelta
 from typing import Dict, Any, List, Optional
 from langchain_core.prompts import PromptTemplate
@@ -26,21 +27,12 @@ class TriageAnamnesisAgent:
 
         # LangChain prompt template for custom model invocation
         self.anamnesis_prompt_template = PromptTemplate(
-            input_variables=["patient_age", "patient_gender", "language", "symptoms", "rag_protocol"],
+            input_variables=["patient_age", "patient_gender", "language", "symptoms"],
             template=(
-                "You are an expert primary care doctor conducting patient intake.\n"
-                "A patient presents with the following symptoms:\n"
-                "Patient Age: {patient_age}, Gender: {patient_gender}, Language: {language}\n"
-                "Reported Symptoms: \"{symptoms}\"\n\n"
-                "Clinical Anamnesis Protocol Reference:\n{rag_protocol}\n\n"
-                "Analyze the case and return a JSON object with:\n"
-                "1. symptoms: list of clean clinical terms\n"
-                "2. timeline: list of chronological event objects with 'date', 'event', 'duration'\n"
-                "3. missing: list of 3-4 vital clinical parameters not yet documented\n"
-                "4. follow_up_questions: a list of 8 to 10 sequential questions following the protocol.\n"
-                "Each question MUST be an object with keys: id, question, type ('radio' or 'number' or 'text'), options (list of 3-5 strings), placeholder, unit.\n"
-                "CRITICAL REQUIREMENT: Use very simple, plain, easy-to-understand everyday English in all questions and options so that a less-educated person or rural patient can easily understand every word. Do NOT use complicated medical jargon.\n"
-                "Return ONLY valid JSON."
+                "Patient Age: {patient_age}, Gender: {patient_gender}, Language: {language}.\n"
+                "Reported Symptoms: {symptoms}.\n"
+                "Generate 8 to 10 sequential doctor anamnesis questions in simple everyday language.\n"
+                "Return a JSON object with 'follow_up_questions': [\"question 1\", \"question 2\", ...]."
             )
         )
 
@@ -131,6 +123,151 @@ class TriageAnamnesisAgent:
             ]
         }
 
+    def _parse_custom_model_output(self, model_response: str, raw: str) -> Optional[Dict[str, Any]]:
+        """
+        Parses fine-tuned model output whether returned as pure JSON or as a structured Markdown clinical report.
+        """
+        if not model_response or not model_response.strip():
+            return None
+
+        cleaned = model_response.strip()
+        parsed: Dict[str, Any] = {}
+
+        # 1. Attempt direct JSON parsing if wrapped in { ... }
+        try:
+            candidate = cleaned
+            if "```json" in candidate:
+                candidate = candidate.split("```json")[1].split("```")[0].strip()
+            elif "```" in candidate:
+                candidate = candidate.split("```")[1].split("```")[0].strip()
+
+            start_idx = candidate.find("{")
+            end_idx = candidate.rfind("}")
+            if start_idx != -1 and end_idx != -1 and end_idx > start_idx:
+                json_candidate = candidate[start_idx:end_idx + 1]
+                p = json.loads(json_candidate)
+                if isinstance(p, dict):
+                    parsed = p
+        except Exception:
+            pass
+
+        # 2. Extract balanced JSON array for follow_up_questions if not in top-level JSON
+        raw_questions = parsed.get("follow_up_questions") or parsed.get("questions") or []
+        if not raw_questions or not isinstance(raw_questions, list):
+            search_key = "follow_up_questions" if "follow_up_questions" in cleaned.lower() else "questions"
+            idx = cleaned.lower().find(search_key)
+            if idx != -1:
+                bracket_start = cleaned.find("[", idx)
+                if bracket_start != -1:
+                    depth = 0
+                    in_string = False
+                    escape = False
+                    for i in range(bracket_start, len(cleaned)):
+                        ch = cleaned[i]
+                        if escape:
+                            escape = False
+                            continue
+                        if ch == "\\":
+                            escape = True
+                            continue
+                        if ch == '"':
+                            in_string = not in_string
+                            continue
+                        if not in_string:
+                            if ch == "[":
+                                depth += 1
+                            elif ch == "]":
+                                depth -= 1
+                                if depth == 0:
+                                    try:
+                                        array_json = cleaned[bracket_start:i + 1]
+                                        q_list = json.loads(array_json)
+                                        if isinstance(q_list, list):
+                                            raw_questions = q_list
+                                    except Exception:
+                                        pass
+                                    break
+
+        # If questions list is still missing or too short, return None to safely fall back to Clinical RAG
+        if not isinstance(raw_questions, list) or len(raw_questions) < 2:
+            return None
+
+        # 3. Format questions into standardized UI schema
+        formatted_questions = []
+        for idx, q in enumerate(raw_questions):
+            if isinstance(q, str):
+                formatted_questions.append({
+                    "id": f"q_{idx + 1}",
+                    "question": q,
+                    "type": "radio",
+                    "options": [
+                        "Yes, definitely",
+                        "Mild / Only sometimes",
+                        "No, not at all",
+                        "Not sure / Cannot say"
+                    ]
+                })
+            elif isinstance(q, dict):
+                q_id = str(q.get("id") or f"q_{idx + 1}")
+                q_text = str(q.get("question") or q.get("text") or "")
+                q_type = str(q.get("type") or "radio")
+                q_options = q.get("options")
+                if not q_options or not isinstance(q_options, list) or len(q_options) == 0:
+                    q_options = ["Yes", "No", "Mild", "Not sure"]
+                formatted_questions.append({
+                    "id": q_id,
+                    "question": q_text,
+                    "type": q_type,
+                    "options": q_options,
+                    "placeholder": q.get("placeholder", ""),
+                    "unit": q.get("unit", "")
+                })
+
+        base_data = self._extract_dates_and_symptoms(raw)
+
+        # 4. Extract symptoms from markdown if not parsed
+        symptoms = parsed.get("symptoms")
+        if not symptoms:
+            symp_match = re.search(r"(?:1\.\s*)?(?:\*\*)?symptoms(?:\*\*)?\s*:\s*([^\n\r]+)", cleaned, re.IGNORECASE)
+            if symp_match:
+                symptoms = [s.strip(" -*,") for s in symp_match.group(1).split(",") if s.strip(" -*,")]
+        if not symptoms or not isinstance(symptoms, list):
+            symptoms = base_data["symptoms"]
+
+        # 5. Extract timeline from markdown if not parsed
+        timeline = parsed.get("timeline")
+        if not timeline:
+            time_match = re.search(r"(?:2\.\s*)?(?:\*\*)?timeline(?:\*\*)?\s*:\s*([^\n\r]+)", cleaned, re.IGNORECASE)
+            if time_match:
+                t_str = time_match.group(1).strip(" -*")
+                if t_str:
+                    timeline = [{"date": "Reported", "event": t_str, "duration": "Recent"}]
+        if not timeline or not isinstance(timeline, list):
+            timeline = base_data["timeline"]
+
+        # 6. Extract missing parameters from markdown if not parsed
+        missing = parsed.get("missing")
+        if not missing:
+            miss_match = re.search(r"(?:3\.\s*)?(?:\*\*)?missing(?:\*\*)?\s*:\s*([\s\S]*?)(?:(?:4\.\s*)?(?:\*\*)?follow_up|$)", cleaned, re.IGNORECASE)
+            if miss_match:
+                m_lines = [line.strip(" -*\t\r") for line in miss_match.group(1).splitlines() if line.strip(" -*\t\r")]
+                if m_lines:
+                    missing = m_lines
+        if not missing or not isinstance(missing, list):
+            missing = base_data["missing"]
+
+        return {
+            "status": "success",
+            "source": "Custom Fine-Tuned Triage Model (Kaggle/HF Agent)",
+            "model": "User-Fine-Tuned-Clinical-Model",
+            "data": {
+                "symptoms": symptoms,
+                "timeline": timeline,
+                "missing": missing,
+                "follow_up_questions": formatted_questions
+            }
+        }
+
     async def extract_symptoms_and_generate_questions(
         self,
         raw_symptoms: str,
@@ -152,8 +289,7 @@ class TriageAnamnesisAgent:
             patient_age=patient_age,
             patient_gender=patient_gender,
             language=language,
-            symptoms=raw,
-            rag_protocol=rag_protocol_summary
+            symptoms=raw
         )
 
         model_response = await self.client.invoke_triage_model(
@@ -167,21 +303,9 @@ class TriageAnamnesisAgent:
 
         if model_response:
             try:
-                cleaned = model_response.strip()
-                if "```json" in cleaned:
-                    cleaned = cleaned.split("```json")[1].split("```")[0].strip()
-                elif "```" in cleaned:
-                    cleaned = cleaned.split("```")[1].split("```")[0].strip()
-                parsed = json.loads(cleaned)
-                
-                # Verify that questions were generated and has 8-10 items
-                if "follow_up_questions" in parsed and len(parsed["follow_up_questions"]) >= 5:
-                    return {
-                        "status": "success",
-                        "source": "Custom Fine-Tuned Triage Model (Kaggle/HF Agent)",
-                        "model": "User-Fine-Tuned-Clinical-Model",
-                        "data": parsed
-                    }
+                parsed_model_data = self._parse_custom_model_output(model_response, raw)
+                if parsed_model_data:
+                    return parsed_model_data
             except Exception as e:
                 print(f"[Custom Model Parse Notice] {e}. Falling back to dynamic Clinical RAG.")
 

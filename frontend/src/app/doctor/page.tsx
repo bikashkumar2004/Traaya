@@ -419,7 +419,7 @@ export default function DoctorPage() {
   return (
     <Suspense
       fallback={
-        <div className="min-h-screen bg-[#f4f7fb] flex items-center justify-center">
+        <div className="min-h-screen bg-[#F3F9F7] flex items-center justify-center">
           <div className="flex items-center gap-2 text-teal-800 font-bold text-sm">
             <RefreshCw className="w-5 h-5 animate-spin text-teal-700" />
             <span>Loading Doctor Clinical Hub...</span>

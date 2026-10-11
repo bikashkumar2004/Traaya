@@ -81,7 +81,7 @@ export async function POST(req: Request) {
 
     const assignedRole = role || "patient";
     const computedFullName = (fullName || "Test Administrator User").trim();
-    const cleanEmail = email ? email.trim().toLowerCase() : `user_${Date.now()}@triageassist.test`;
+    const cleanEmail = email ? email.trim().toLowerCase() : `user_${Date.now()}@traaya.test`;
     const cleanDigits = phone ? phone.replace(/\D/g, "") : "";
     const digitsPhone = cleanDigits ? (cleanDigits.startsWith("91") ? cleanDigits : `91${cleanDigits.slice(-10)}`) : `91943710${Math.floor(1000 + Math.random() * 9000)}`;
     const formattedPhone = `+91 ${digitsPhone.slice(-10)}`;

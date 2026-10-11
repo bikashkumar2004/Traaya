@@ -12,7 +12,6 @@ import {
   Bell,
   Lock,
   Users,
-  PhoneCall,
   ShieldCheck,
   Building2,
   Clock,
@@ -39,7 +38,6 @@ export function PatientShell({ children }: PatientShellProps) {
   const [langSearch, setLangSearch] = useState("");
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
   const [emergencyModalOpen, setEmergencyModalOpen] = useState(false);
-  const [ashaModalOpen, setAshaModalOpen] = useState(false);
 
   const filteredLanguages = INDIAN_LANGUAGES.filter(
     (l) =>
@@ -68,24 +66,24 @@ export function PatientShell({ children }: PatientShellProps) {
       exact: true
     },
     {
+      href: "/citizen/reminders",
+      label: "My Care",
+      icon: Bell
+    },
+    {
       href: "/citizen/symptoms",
-      label: "Report Symptoms",
+      label: "Book Appointment",
       icon: ClipboardList
+    },
+    {
+      href: "/citizen/upload",
+      label: "Add Medical Record",
+      icon: UploadCloud
     },
     {
       href: "/citizen/timeline",
       label: "My Timeline & Visits",
       icon: Calendar
-    },
-    {
-      href: "/citizen/upload",
-      label: "Upload Reports",
-      icon: UploadCloud
-    },
-    {
-      href: "/citizen/reminders",
-      label: "Reminders & Follow-ups",
-      icon: Bell
     },
     {
       href: "/citizen/profile",
@@ -95,7 +93,7 @@ export function PatientShell({ children }: PatientShellProps) {
   ];
 
   return (
-    <div className="flex min-h-screen bg-[#f4f7fb] text-slate-800 antialiased font-sans">
+    <div className="flex min-h-screen bg-[#F3F9F7] text-slate-800 antialiased font-sans">
       {/* Mobile menu overlay */}
       {mobileMenuOpen && (
         <div
@@ -104,9 +102,9 @@ export function PatientShell({ children }: PatientShellProps) {
         />
       )}
 
-      {/* LEFT SIDEBAR (Light Soft Blue #EAF1FF) - Fixed Position */}
+      {/* LEFT SIDEBAR (Light Soft Blue #ffffff) - Fixed Position */}
       <aside
-        className={`fixed inset-y-0 left-0 z-40 w-64 h-screen bg-[#EAF1FF] text-slate-800 flex flex-col justify-between border-r border-blue-200/70 transition-transform duration-200 ${
+        className={`fixed inset-y-0 left-0 z-40 w-64 h-screen bg-[#ffffff] text-slate-800 flex flex-col justify-between border-r border-blue-200/70 transition-transform duration-200 ${
           mobileMenuOpen ? "translate-x-0 shadow-2xl z-50" : "-translate-x-full lg:translate-x-0"
         }`}
       >
@@ -114,17 +112,11 @@ export function PatientShell({ children }: PatientShellProps) {
           {/* Top Brand with Landing Page Logo */}
           <div className="p-4 border-b border-blue-200/60 flex items-center justify-between shrink-0">
             <Link href="/citizen" className="flex items-center gap-2.5 group">
-              <div className="w-8 h-8 rounded-xl bg-teal-700 flex items-center justify-center text-white shadow-xs group-hover:scale-105 transition-transform shrink-0">
-                <Activity className="w-4 h-4" />
-              </div>
-              <div className="flex flex-col min-w-0">
-                <span className="font-extrabold text-base tracking-tight text-slate-900 leading-tight">
-                  Triage<span className="text-teal-700">Assist</span>
-                </span>
-                <span className="text-[10px] font-semibold text-teal-800 tracking-wide leading-none mt-1">
-                  Citizen Health Portal
-                </span>
-              </div>
+              <img
+                src="/traaya-logo.png"
+                alt="TRAAYA Logo"
+                className="h-10 w-auto object-contain shrink-0 group-hover:scale-105 transition-transform"
+              />
             </Link>
             <button
               type="button"
@@ -172,15 +164,6 @@ export function PatientShell({ children }: PatientShellProps) {
               <span>SOS Emergency 108</span>
             </button>
 
-            <button
-              type="button"
-              onClick={() => setAshaModalOpen(true)}
-              className="w-full bg-teal-700 hover:bg-teal-800 text-white font-bold text-xs py-2 px-3 rounded-xl shadow-xs flex items-center justify-center gap-2 transition-colors cursor-pointer"
-            >
-              <PhoneCall className="w-3.5 h-3.5" />
-              <span>Dial ASHA Worker</span>
-            </button>
-
             <div className="pt-2 text-[10px] text-slate-600 border-t border-blue-200/60 flex items-start gap-1.5">
               <ShieldCheck className="w-3.5 h-3.5 text-teal-700 shrink-0 mt-0.5" />
               <div>
@@ -208,17 +191,18 @@ export function PatientShell({ children }: PatientShellProps) {
               <Menu className="w-5 h-5" />
             </button>
             <div className="lg:hidden flex items-center gap-2">
-              <div className="w-7 h-7 rounded-lg bg-teal-700 flex items-center justify-center text-white shadow-xs shrink-0">
-                <Activity className="w-3.5 h-3.5" />
-              </div>
-              <div className="flex flex-col">
-                <span className="font-extrabold text-sm tracking-tight text-slate-900 leading-tight">
-                  Triage<span className="text-teal-700">Assist</span>
-                </span>
-                <span className="text-[9px] font-semibold text-teal-800 leading-none mt-0.5">
-                  Citizen Health Portal
-                </span>
-              </div>
+              <img
+                src="/traaya-logo.png"
+                alt="TRAAYA Logo"
+                className="h-7 w-auto object-contain shrink-0"
+              />
+            </div>
+
+            {/* Desktop Left: Citizen Health Portal */}
+            <div className="hidden lg:flex items-center">
+              <span className="text-[11px] font-bold text-teal-800 bg-teal-50 px-2 py-0.5 rounded border border-teal-200 max-w-[220px] truncate">
+                Citizen Health Portal
+              </span>
             </div>
           </div>
 
@@ -396,40 +380,6 @@ export function PatientShell({ children }: PatientShellProps) {
                 className="px-4 py-2.5 border border-slate-300 text-slate-700 font-semibold text-xs rounded-xl hover:bg-slate-50 cursor-pointer"
               >
                 Dismiss
-              </button>
-            </div>
-          </div>
-        </div>
-      )}
-
-      {/* ASHA WORKER MODAL */}
-      {ashaModalOpen && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/60 backdrop-blur-xs">
-          <div className="bg-white rounded-2xl max-w-md w-full p-6 shadow-2xl border border-teal-200 text-center space-y-4">
-            <div className="w-14 h-14 rounded-full bg-teal-100 text-teal-700 flex items-center justify-center mx-auto">
-              <PhoneCall className="w-7 h-7" />
-            </div>
-            <h3 className="text-base font-bold text-slate-900">
-              Direct ASHA Worker Connection
-            </h3>
-            <div className="bg-slate-50 p-3.5 rounded-xl border border-slate-200 text-left space-y-1 text-xs">
-              <div className="font-bold text-slate-900">Sunita Didi (ASHA Worker)</div>
-              <div className="text-slate-500">Village Rampur &bull; Sector 3</div>
-              <div className="text-teal-700 font-mono font-bold">+91 94150 82160</div>
-            </div>
-            <div className="flex gap-2">
-              <a
-                href="tel:+919415082160"
-                className="flex-1 py-2.5 bg-teal-700 hover:bg-teal-800 text-white font-bold text-xs rounded-xl shadow-xs text-center"
-              >
-                Call Sunita Didi
-              </a>
-              <button
-                type="button"
-                onClick={() => setAshaModalOpen(false)}
-                className="px-4 py-2.5 border border-slate-300 text-slate-700 font-semibold text-xs rounded-xl hover:bg-slate-50 cursor-pointer"
-              >
-                Close
               </button>
             </div>
           </div>

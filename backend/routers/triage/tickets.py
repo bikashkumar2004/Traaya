@@ -248,15 +248,45 @@ async def answer_reverted_questions(req: AnswerRevertedQuestionsRequest):
                 raise HTTPException(status_code=404, detail="Ticket not found")
 
             ticket = tickets[0]
-            existing_questions = ticket.get("reverted_questions") or []
-            answers_map = {a.get("id"): a.get("answer") for a in req.answers}
+            raw_existing = ticket.get("reverted_questions") or []
+            if isinstance(raw_existing, str):
+                try:
+                    raw_existing = json.loads(raw_existing)
+                except Exception:
+                    raw_existing = [
+                        {"id": f"q_{idx+1}", "question": line.strip(), "answer": ""}
+                        for idx, line in enumerate(raw_existing.split("\n"))
+                        if line.strip()
+                    ]
+            if isinstance(raw_existing, dict):
+                raw_existing = [raw_existing]
+            elif not isinstance(raw_existing, list):
+                raw_existing = []
+
+            existing_questions = []
+            for idx, q in enumerate(raw_existing):
+                if isinstance(q, str):
+                    if q.strip():
+                        existing_questions.append({"id": f"q_{idx+1}", "question": q.strip(), "answer": ""})
+                elif isinstance(q, dict):
+                    q_text = str(q.get("question") or q.get("q") or "").strip()
+                    if q_text:
+                        existing_questions.append({
+                            "id": str(q.get("id") or f"q_{idx+1}"),
+                            "question": q_text,
+                            "answer": str(q.get("answer") or ""),
+                            "answered_at": q.get("answered_at")
+                        })
+
+            answers_map = {str(a.get("id")): a.get("answer") for a in req.answers}
 
             updated_questions = []
-            for q in existing_questions:
-                qid = q.get("id")
+            for idx, q in enumerate(existing_questions):
+                qid = str(q.get("id") or f"q_{idx+1}")
                 new_q = dict(q)
-                if qid in answers_map:
-                    new_q["answer"] = answers_map[qid]
+                new_q["id"] = qid
+                if qid in answers_map and answers_map[qid] is not None:
+                    new_q["answer"] = str(answers_map[qid]).strip()
                     new_q["answered_at"] = datetime.now().isoformat()
                 updated_questions.append(new_q)
 

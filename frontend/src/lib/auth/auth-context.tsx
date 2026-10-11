@@ -266,7 +266,7 @@ export function AuthProvider({ children, initialUser }: { children: React.ReactN
 
     const newUser: UserProfile = {
       id: `usr-${cleanDigits.slice(-6) || Date.now().toString().slice(-6)}`,
-      email: `${cleanDigits.slice(-10)}@triageassist.live`,
+      email: `${cleanDigits.slice(-10)}@traaya.live`,
       fullName: customName || `${role.charAt(0).toUpperCase() + role.slice(1)} User`,
       role: role,
       phone: formattedPhone,

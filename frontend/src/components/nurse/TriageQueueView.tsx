@@ -11,14 +11,13 @@ import {
   Search,
   Filter,
   UserPlus,
-  Building2,
   Sparkles,
   Flame,
   AlertCircle,
   CheckCircle2,
-  Video,
-  Languages,
   RotateCcw,
+  Activity,
+  FileText,
 } from "lucide-react";
 
 interface TriageQueueViewProps {
@@ -121,7 +120,7 @@ export function TriageQueueView({
               : "border-slate-200 hover:border-slate-300 hover:shadow-sm"
           }`}
         >
-          <span className="text-xs text-slate-500 font-medium">Cases Triaged</span>
+          <span className="text-xs text-slate-500 font-medium">Awaiting Review</span>
           <div className="text-2xl sm:text-3xl font-black text-slate-900 mt-1.5 tabular-nums">
             {totalCount}
           </div>
@@ -230,117 +229,139 @@ export function TriageQueueView({
             key={item.id}
             className="bg-white rounded-2xl border border-slate-200 p-5 shadow-xs hover:border-teal-300 hover:shadow-md transition-all flex flex-col md:flex-row md:items-center justify-between gap-4"
           >
-            {/* Left Info: Case ID, Priority badge, Mode, Language, Patient ID, Name, Age/Gender, Location, Chief Complaint, Submitted */}
-            <div className="space-y-1.5 min-w-0">
-              <div className="flex items-center gap-2.5 flex-wrap">
-                <span className="text-base font-extrabold text-slate-900 tracking-tight">
-                  Case {item.id}
-                </span>
-                <span
-                  className={`px-2.5 py-0.5 rounded-full text-[10px] font-bold border ${item.urgencyClass}`}
-                >
-                  {item.urgency}
-                </span>
-
-                {/* Reverted Status Badge */}
-                {(() => {
-                  const sLow = (item.status || "").toLowerCase().trim();
-                  const isReverted = sLow.includes("revert") || sLow.includes("awaiting patient");
-                  if (!isReverted) return null;
-                  return (
-                    <span className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full text-[10px] font-bold bg-amber-50 text-amber-800 border border-amber-300">
-                      <RotateCcw className="w-3 h-3 text-amber-600" />
-                      <span>Reverted</span>
-                    </span>
-                  );
-                })()}
-                {item.scheduleTime && (
-                  <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-md text-[10px] font-bold bg-teal-50 text-teal-800 border border-teal-200">
-                    <Clock className="w-3 h-3 text-teal-600" />
-                    <span>
-                      {(() => {
-                        try {
-                          const d = new Date(item.scheduleTime);
-                          return `Slot: ${d.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}`;
-                        } catch {
-                          return "Scheduled";
-                        }
-                      })()}
-                    </span>
+              {/* Left Info: Case ID, Priority badge, Mode, Patient ID, Name, Submission Time, Highlighted Symptoms */}
+              <div className="space-y-2.5 min-w-0 flex-1">
+                {/* Header row: Case ID, Priority Badge, Reverted, Consultation Mode, Language, Submitted Time */}
+                <div className="flex items-center gap-2.5 flex-wrap">
+                  <span className="text-base font-extrabold text-slate-900 tracking-tight">
+                    Case {item.id}
                   </span>
-                )}
-                {/* Consultation Mode Badge */}
-                <span className={`inline-flex items-center gap-1 px-2 py-0.5 rounded-md text-[10px] font-bold border ${
-                  item.consultationMode === "online"
-                    ? "bg-indigo-50 text-indigo-800 border-indigo-200"
-                    : "bg-blue-50 text-blue-800 border-blue-200"
-                }`}>
-                  {item.consultationMode === "online" ? (
-                    <Video className="w-3 h-3 text-indigo-600" />
-                  ) : (
-                    <Building2 className="w-3 h-3 text-blue-600" />
+                  <span
+                    className={`px-2.5 py-0.5 rounded-full text-[10px] font-bold border ${item.urgencyClass}`}
+                  >
+                    {item.urgency}
+                  </span>
+
+                  {/* Reverted Status Badge */}
+                  {(() => {
+                    const sLow = (item.status || "").toLowerCase().trim();
+                    const isReverted = sLow.includes("revert") || sLow.includes("awaiting patient");
+                    if (!isReverted) return null;
+                    return (
+                      <span className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full text-[10px] font-bold bg-amber-50 text-amber-800 border border-amber-300">
+                        <RotateCcw className="w-3 h-3 text-amber-600" />
+                        <span>Reverted</span>
+                      </span>
+                    );
+                  })()}
+
+                  {item.scheduleTime && (
+                    <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-md text-[10px] font-bold bg-teal-50 text-teal-800 border border-teal-200">
+                      <Clock className="w-3 h-3 text-teal-600" />
+                      <span>
+                        {(() => {
+                          try {
+                            const d = new Date(item.scheduleTime);
+                            return `Slot: ${d.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}`;
+                          } catch {
+                            return "Scheduled";
+                          }
+                        })()}
+                      </span>
+                    </span>
                   )}
-                  <span>{item.consultationMode === "online" ? "Online Teleconsult" : "In-Person Walk-in"}</span>
-                </span>
-                {/* Preferred Language Badge */}
-                <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-md text-[10px] font-bold bg-teal-50 text-teal-800 border border-teal-200/80">
-                  <Languages className="w-3 h-3 text-teal-600" />
-                  <span>{item.language || "Odia"}</span>
-                </span>
+
+                  {/* Submission Time */}
+                  <span className="inline-flex items-center gap-1 text-[11px] text-slate-500 font-medium">
+                    <Clock className="w-3 h-3 text-slate-400" />
+                    <span>Submitted {item.submittedTime}</span>
+                  </span>
+                </div>
+
+                {/* Patient Identity row: Patient ID and Name (no age, gender, or location) */}
+                <div className="text-xs text-slate-600 flex items-center gap-2 flex-wrap">
+                  <span className="font-semibold text-slate-800">
+                    Patient ID: <span className="font-mono text-slate-900 font-bold">{item.patientId}</span>
+                  </span>
+                  {item.name && (
+                    <>
+                      <span className="text-slate-300">&bull;</span>
+                      <span className="font-medium text-slate-700">
+                        Name: <span className="font-semibold text-slate-900">{item.name}</span>
+                      </span>
+                    </>
+                  )}
+                </div>
+
+                {/* HIGHLIGHTED SYMPTOMS & CLINICAL PRESENTATION */}
+                <div className="pt-1 flex flex-wrap items-center gap-2">
+                  {(() => {
+                    const rawList =
+                      (item.symptomsData?.symptoms && item.symptomsData.symptoms.length > 0)
+                        ? item.symptomsData.symptoms
+                        : (item.aiInfo?.symptoms && item.aiInfo.symptoms.length > 0)
+                        ? item.aiInfo.symptoms
+                        : [];
+
+                    const symptomsList = rawList.length > 0 ? rawList : [item.chiefComplaint || "General Symptoms"];
+
+                    return (
+                      <>
+                        <div className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-teal-50/80 border border-teal-200/90 text-teal-900 shadow-2xs">
+                          <Activity className="w-3.5 h-3.5 text-teal-600 shrink-0" />
+                          <span className="text-[10px] font-bold uppercase tracking-wider text-teal-700">
+                            Symptoms:
+                          </span>
+                          <span className="text-xs font-black text-slate-900">
+                            {symptomsList[0]}
+                          </span>
+                        </div>
+
+                        {symptomsList.slice(1, 4).map((s, idx) => (
+                          <span
+                            key={idx}
+                            className="px-2.5 py-1 rounded-lg text-xs font-semibold bg-slate-100 text-slate-700 border border-slate-200/80"
+                          >
+                            +{s}
+                          </span>
+                        ))}
+                      </>
+                    );
+                  })()}
+
+
+
+                  {/* Red Flag Warning Pill */}
+                  {item.aiInfo?.redFlags && !item.aiInfo.redFlags.toLowerCase().includes("none") && (
+                    <span className="inline-flex items-center gap-1 px-2.5 py-1 rounded-lg text-[11px] font-bold bg-rose-50 text-rose-800 border border-rose-200">
+                      <AlertTriangle className="w-3 h-3 text-rose-600" />
+                      <span>Red Flag: {item.aiInfo.redFlags}</span>
+                    </span>
+                  )}
+
+                  {/* Medical Report Attached Badge */}
+                  {((item.reports && item.reports.length > 0) || item.uploadedReportUrl) && (
+                    <span className="inline-flex items-center gap-1 px-2.5 py-1 rounded-lg text-[11px] font-semibold bg-blue-50 text-blue-800 border border-blue-200">
+                      <FileText className="w-3 h-3 text-blue-600" />
+                      <span>Report Attached</span>
+                    </span>
+                  )}
+                </div>
               </div>
 
-              <div className="text-xs text-slate-600 flex items-center gap-2 flex-wrap">
-                <span className="font-semibold text-slate-800">
-                  Patient ID: {item.patientId}
-                </span>
-                {item.name && (
-                  <>
-                    <span>&bull;</span>
-                    <span className="font-medium text-slate-700">
-                      Name: {item.name}
-                    </span>
-                  </>
-                )}
-                {(item.age || item.gender) && (
-                  <>
-                    <span>&bull;</span>
-                    <span className="text-slate-500">
-                      {item.age ? `${item.age} yrs` : ""} {item.age && item.gender ? "•" : ""} {item.gender || ""}
-                    </span>
-                  </>
-                )}
-                {item.location && (
-                  <>
-                    <span>&bull;</span>
-                    <span className="text-slate-500">
-                      {item.location}
-                    </span>
-                  </>
-                )}
+              {/* Right Action: Review Button */}
+              <div className="flex items-center gap-3 shrink-0 self-end md:self-center">
+                <button
+                  type="button"
+                  onClick={() => onSelectCase(item)}
+                  className="px-5 py-2.5 bg-slate-900 hover:bg-teal-700 text-white font-bold text-xs rounded-xl shadow-xs hover:shadow-md flex items-center gap-2 transition-all cursor-pointer group"
+                >
+                  <span>Review Case</span>
+                  <ArrowRight className="w-3.5 h-3.5 group-hover:translate-x-0.5 transition-transform" />
+                </button>
               </div>
-
-              <p className="text-xs text-slate-600 line-clamp-1 italic max-w-2xl pt-0.5">
-                &ldquo;{item.chiefComplaint}&rdquo;
-              </p>
-
-              <p className="text-xs text-slate-500">
-                Submitted: {item.submittedTime}
-              </p>
             </div>
-
-            {/* Right Action: Review Button */}
-            <div className="flex items-center gap-3 shrink-0">
-              <button
-                type="button"
-                onClick={() => onSelectCase(item)}
-                className="px-5 py-2.5 bg-slate-900 hover:bg-teal-800 text-white font-bold text-xs rounded-xl shadow-xs flex items-center gap-1.5 transition-all cursor-pointer group"
-              >
-                <span>Review</span>
-                <ArrowRight className="w-3.5 h-3.5 group-hover:translate-x-0.5 transition-transform" />
-              </button>
-            </div>
-          </div>
-        ))}
+          ))}
 
         {filteredCases.length === 0 && (
           <div className="bg-white rounded-2xl border border-dashed border-slate-300 p-12 text-center text-slate-500 space-y-3">

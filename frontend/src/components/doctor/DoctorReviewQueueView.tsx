@@ -187,7 +187,7 @@ export function DoctorReviewQueueView({
   const [queueSearch, setQueueSearch] = useState<string>("");
 
   // Review Workspace state
-  const [activeTab, setActiveTab] = useState<string>("Overview");
+  const activeTab = "Overview";
   const [selectedAction, setSelectedAction] = useState<string>("Generate Report & Discharge");
   const [reviewNote, setReviewNote] = useState<string>("");
 
@@ -287,15 +287,6 @@ export function DoctorReviewQueueView({
     const remSecs = secs % 60;
     return `${mins.toString().padStart(2, "0")}:${remSecs.toString().padStart(2, "0")}`;
   };
-
-  const tabs = [
-    "Overview",
-    "Symptoms & Timeline",
-    "Q&A History",
-    "Medical Reports",
-    "AI Summary",
-    "Activity Log",
-  ];
 
   // Clinical Actions
   const actionOptions: DoctorActionOption[] = [
@@ -613,23 +604,6 @@ export function DoctorReviewQueueView({
                 Via CHC Nurse Station &bull; Verified by {selectedCase.nurseName || "Nurse Priya S."}
               </div>
             </div>
-          </div>
-
-          {/* Tabs Row */}
-          <div className="flex items-center gap-1 border-b border-slate-200 pt-1 overflow-x-auto scrollbar-none">
-            {tabs.map((tab) => (
-              <button
-                key={tab}
-                onClick={() => setActiveTab(tab)}
-                className={`px-4 py-2.5 text-xs font-bold border-b-2 whitespace-nowrap transition-colors cursor-pointer ${
-                  activeTab === tab
-                    ? "border-teal-700 text-teal-900 font-extrabold"
-                    : "border-transparent text-slate-500 hover:text-slate-800 hover:border-slate-300"
-                }`}
-              >
-                {tab}
-              </button>
-            ))}
           </div>
         </div>
 

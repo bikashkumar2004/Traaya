@@ -100,27 +100,7 @@ export function Step1PatientTypeSearch({
         </button>
       </div>
 
-      {patientType === "new" && (
-        <div className="p-4 bg-emerald-50/70 border border-emerald-200 rounded-2xl flex items-start gap-3">
-          <div className="w-9 h-9 rounded-xl bg-emerald-100 border border-emerald-300 flex items-center justify-center text-emerald-800 shrink-0">
-            <UserPlus className="w-5 h-5" />
-          </div>
-          <div className="space-y-1">
-            <div className="text-xs font-bold text-emerald-950 flex flex-wrap items-center gap-2">
-              <span>New Walk-in Intake Mode</span>
-              <span className="font-mono text-[10px] px-2 py-0.5 rounded-full bg-white text-emerald-800 border border-emerald-300 font-bold">
-                UHID: {generatedUhid}
-              </span>
-              <span className="text-[10px] font-bold px-2 py-0.5 rounded-full bg-teal-100 text-teal-800 border border-teal-200">
-                Destination: new_patient table
-              </span>
-            </div>
-            <p className="text-[11px] text-emerald-700 leading-relaxed">
-              First-time community visitor. The patient will be recorded in the dedicated <strong>new_patient</strong> table. Profiles and auth accounts are not modified.
-            </p>
-          </div>
-        </div>
-      )}
+
 
       {patientType === "existing" && (
         <div className="p-4 bg-slate-50 rounded-2xl border border-slate-200 space-y-3">

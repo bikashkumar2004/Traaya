@@ -145,14 +145,22 @@ export function mapDbTicketToCase(t: any, linkedReports: any[] = []): CaseDetail
     nurseName: t.nurse_name || t.nurse_profile?.full_name || undefined,
     doctorId: t.doctor_id || undefined,
     doctorName: t.assigned_doctor_name || t.doctor_name || t.doctor_profile?.full_name || undefined,
-    chiefComplaint: sdata.chief_complaint || t.chief_complaint || (symptoms.length ? symptoms.join(", ") : "Clinical evaluation"),
+    chiefComplaint: sdata.raw_complaint || sdata.complaint || sdata.chief_complaint || t.chief_complaint || sdata.summary || (symptoms.length ? symptoms.join(", ") : "Clinical evaluation"),
     aiInfo: {
       symptoms,
-      duration: sdata.duration || "3 days",
-      severity: sdata.severity || "Moderate",
-      associated: sdata.associated || "None",
-      redFlags: sdata.red_flags || "None detected yet",
+      duration: sdata.duration || (sdata.questions_answers?.fever_duration) || (sdata.questions_answers?.duration) || (sdata.questions_answers?.daily_persistence) || "3 days",
+      severity: sdata.severity || (sdata.questions_answers?.weakness_severity) || (sdata.questions_answers?.pain_severity) || (sdata.questions_answers?.headache_severity) || "Moderate",
+      associated: sdata.associated || (sdata.questions_answers?.associated_symptoms) || "None",
+      redFlags: sdata.red_flags || (sdata.questions_answers?.fever_and_chills) || "None detected yet",
     },
+    symptomsData: {
+      symptoms,
+      raw_complaint: sdata.raw_complaint || sdata.chief_complaint,
+      summary: sdata.summary || sdata.clinical_summary || sdata.symptoms_summary || sdata.patient_summary || sdata.chief_complaint || sdata.raw_complaint || t.chief_complaint || (symptoms.length ? symptoms.join(", ") : "Clinical evaluation"),
+      questions_answers: typeof sdata.questions_answers === "object" ? sdata.questions_answers : {},
+      raw_qa: Array.isArray(sdata.raw_qa) ? sdata.raw_qa : [],
+    },
+    symptoms_data: sdata,
     missingDetails,
     reports: reportsList,
     aiReportAnalysis: aiReportAnalysisList,
@@ -164,7 +172,36 @@ export function mapDbTicketToCase(t: any, linkedReports: any[] = []): CaseDetail
     uploadedReportData: t.uploaded_report_data || undefined,
     consultationMode: t.consultation_mode || "online",
     scheduleTime: t.schedule_time || undefined,
-    revertedQuestions: t.reverted_questions || [],
+    revertedQuestions: (() => {
+      const raw = t.reverted_questions || sdata.reverted_questions;
+      if (!raw) return [];
+      let list = raw;
+      if (typeof list === "string") {
+        try {
+          list = JSON.parse(list);
+        } catch {
+          list = list
+            .split("\n")
+            .map((line: string) => line.trim())
+            .filter(Boolean)
+            .map((line: string, idx: number) => ({ id: `q_${idx + 1}`, question: line, answer: "" }));
+        }
+      }
+      if (!Array.isArray(list)) {
+        list = typeof list === "object" && list !== null ? [list] : [];
+      }
+      return list.map((q: any, idx: number) => {
+        if (typeof q === "string") {
+          return { id: `q_${idx + 1}`, question: q.trim(), answer: "" };
+        }
+        return {
+          id: q.id || `q_${idx + 1}`,
+          question: q.question || q.q || q.title || q.text || "",
+          answer: q.answer || "",
+          answered_at: q.answered_at,
+        };
+      }).filter((q: any) => q.question.trim().length > 0);
+    })(),
     referalFacility: t.referal_facility || undefined,
     referalFacilityId: t.referal_facility_id || undefined,
     transferReason: t.transfer_reason || undefined,

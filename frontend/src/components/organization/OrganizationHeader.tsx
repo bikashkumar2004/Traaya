@@ -19,12 +19,14 @@ export const OrganizationHeader: React.FC<OrganizationHeaderProps> = ({
       <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 h-16 flex items-center justify-between gap-4">
         <div className="flex items-center gap-3 min-w-0">
           <Link href="/" className="flex items-center gap-2.5 group shrink-0">
-            <div className="w-9 h-9 rounded-2xl bg-teal-800 text-white flex items-center justify-center font-bold text-sm shadow-xs group-hover:scale-105 transition-transform">
-              <Building2 className="w-5 h-5" />
-            </div>
+            <img
+              src="/traaya-logo.png"
+              alt="TRAAYA Logo"
+              className="h-9 w-auto object-contain shrink-0 group-hover:scale-105 transition-transform"
+            />
             <div>
-              <span className="font-extrabold text-base sm:text-lg tracking-tight text-slate-900">
-                Triage<span className="text-teal-700">Assist</span>
+              <span className="font-black text-base sm:text-lg tracking-tight text-slate-900">
+                TRAAYA
               </span>
               <span className="text-[10px] font-bold text-teal-800 bg-teal-50 px-2 py-0.5 rounded-full border border-teal-200 ml-2">
                 Organisation Single Dashboard

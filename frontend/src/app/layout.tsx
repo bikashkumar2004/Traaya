@@ -25,8 +25,13 @@ import { cookies } from "next/headers";
 import { UserProfile } from "@/lib/auth-context";
 
 export const metadata: Metadata = {
-  title: "TriageAssist — Clinical Calm & Precision Triage Platform",
-  description: "AI-Assisted Primary Healthcare Triage & Patient Flow for Community Clinics and District Hospitals in India",
+  title: "TRAAYA",
+  description: "TRAAYA: AI-Assisted Primary Healthcare Triage & Patient Flow for Community Clinics and District Hospitals in India",
+  icons: {
+    icon: "/traaya-logo-short.png",
+    shortcut: "/traaya-logo-short.png",
+    apple: "/traaya-logo-short.png",
+  },
 };
 
 export default async function RootLayout({

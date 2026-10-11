@@ -199,7 +199,7 @@ export default function NurseOCRExtractionPage() {
                 </span>
               </div>
               <p className="text-xs text-slate-500 mt-0.5">
-                Facility: {extractedReport.lab_name} &bull; Processed by TriageAssist Vision Parser
+                Facility: {extractedReport.lab_name} &bull; Processed by TRAAYA Vision Parser
               </p>
             </div>
 

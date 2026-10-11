@@ -26,9 +26,13 @@ HF_TOKEN = os.getenv("HF_TOKEN", "")
 TRIAGE_MODEL_URL = os.getenv("TRIAGE_MODEL_URL", os.getenv("HF_ROUTER_BASE", "https://router.huggingface.co/v1"))
 OCR_MODEL_URL = os.getenv("OCR_MODEL_URL", os.getenv("HF_ROUTER_BASE", "https://router.huggingface.co/v1"))
 
-# Legacy fallbacks
+# Groq Configuration
+GROQ_API_KEY = os.getenv("GROQ_API_KEY", "")
+
+# Hugging Face & Model Configuration
 HF_ROUTER_BASE = os.getenv("HF_ROUTER_BASE", "https://router.huggingface.co/v1")
 CUSTOM_TRIAGE_MODEL = os.getenv("CUSTOM_TRIAGE_MODEL", "clinical-triage-doctor")
 CUSTOM_OCR_MODEL = os.getenv("CUSTOM_OCR_MODEL", "clinical-ocr-scanner")
+
 
 

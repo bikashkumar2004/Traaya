@@ -148,7 +148,19 @@ async def get_nurse_queue(facility_id: Optional[str] = None, facility_name: Opti
             elif isinstance(raw_symptoms, str):
                 symptoms_list = [raw_symptoms]
 
-            chief_comp = sdata.get("chief_complaint") or t.get("chief_complaint") or (", ".join(symptoms_list) if symptoms_list else "Clinical consultation")
+            chief_comp = sdata.get("raw_complaint") or sdata.get("chief_complaint") or t.get("chief_complaint") or (", ".join(symptoms_list) if symptoms_list else "Clinical consultation")
+            summary_val = (
+                sdata.get("summary")
+                or sdata.get("clinical_summary")
+                or sdata.get("symptoms_summary")
+                or sdata.get("patient_summary")
+                or sdata.get("raw_complaint")
+                or sdata.get("chief_complaint")
+                or t.get("chief_complaint")
+                or chief_comp
+            )
+            raw_qa_val = sdata.get("raw_qa", []) if isinstance(sdata.get("raw_qa"), list) else []
+            qa_val = sdata.get("questions_answers", {}) if isinstance(sdata.get("questions_answers"), dict) else {}
             priority_val = t.get("priority") or t.get("urgency") or "Yellow"
 
             if "red" in priority_val.lower() or "immediate" in priority_val.lower():
@@ -219,13 +231,21 @@ async def get_nurse_queue(facility_id: Optional[str] = None, facility_name: Opti
                 "urgencyClass": urgency_class,
                 "status": t.get("status") or "Under Review",
                 "chiefComplaint": chief_comp,
+                "symptomsData": {
+                    "symptoms": symptoms_list,
+                    "raw_complaint": sdata.get("raw_complaint") or chief_comp,
+                    "summary": summary_val,
+                    "questions_answers": qa_val,
+                    "raw_qa": raw_qa_val,
+                },
+                "symptoms_data": sdata,
                 "aiInfo": {
                     "symptoms": symptoms_list,
                     "duration": sdata.get("duration", "3 days"),
                     "severity": sdata.get("severity", "Moderate"),
                     "associated": sdata.get("associated", "None"),
                     "redFlags": sdata.get("red_flags", "None detected yet"),
-                    "followUpQa": sdata.get("follow_up_qa", []),
+                    "followUpQa": sdata.get("follow_up_qa", raw_qa_val),
                     "vitals": sdata.get("vitals", {}),
                 },
                 "missingDetails": missing_list,
@@ -250,7 +270,13 @@ async def get_nurse_queue(facility_id: Optional[str] = None, facility_name: Opti
                 "doctorId": t.get("doctor_id"),
                 "nurseId": t.get("nurse_id"),
                 "scheduleTime": t.get("schedule_time"),
-                "revertedQuestions": t.get("reverted_questions") or [],
+                "revertedQuestions": (lambda raw: [
+                    {"id": str(q.get("id") or f"q_{i+1}"), "question": str(q.get("question") or q.get("q") or "").strip(), "answer": str(q.get("answer") or ""), "answered_at": q.get("answered_at")}
+                    for i, q in enumerate(
+                        (json.loads(raw) if isinstance(raw, str) and raw.strip().startswith("[") else ([raw] if isinstance(raw, dict) else (raw if isinstance(raw, list) else [])))
+                    )
+                    if isinstance(q, dict) and str(q.get("question") or q.get("q") or "").strip()
+                ])(t.get("reverted_questions")),
                 "referalFacility": t.get("referal_facility"),
                 "referalFacilityId": t.get("referal_facility_id"),
                 "transferReason": t.get("transfer_reason")

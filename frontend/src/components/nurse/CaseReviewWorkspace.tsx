@@ -68,6 +68,14 @@ export interface CaseDetails {
     associated: string;
     redFlags: string;
   };
+  symptomsData?: {
+    symptoms?: string[];
+    raw_complaint?: string;
+    summary?: string;
+    questions_answers?: Record<string, string>;
+    raw_qa?: Array<{ question: string; answer: string }>;
+  };
+  symptoms_data?: any;
   missingDetails: string[];
   reports: string[];
   aiReportAnalysis: string[];
@@ -123,12 +131,14 @@ interface CaseReviewWorkspaceProps {
     assignedDoctorId?: string,
     referralFacilityId?: string
   ) => void;
+  onUpdateCase?: (updated: Partial<CaseDetails>) => void;
 }
 
 export function CaseReviewWorkspace({
   caseData,
   onBack,
   onSubmitAction,
+  onUpdateCase,
 }: CaseReviewWorkspaceProps) {
   const [activeTab, setActiveTab] = useState<string>("Overview");
   const [selectedAction, setSelectedAction] = useState<string>("Schedule & Forward to Doctor");
@@ -220,20 +230,22 @@ export function CaseReviewWorkspace({
   const [actionSuccessToast, setActionSuccessToast] = useState<string | null>(null);
 
   // Reverted Questions list in JSON format
-  const [revertedQuestionsList, setRevertedQuestionsList] = useState<string[]>([
-    "What is your current body temperature reading?",
-    "Have you taken any medication since reporting symptoms?",
-  ]);
+  const [revertedQuestionsList, setRevertedQuestionsList] = useState<string[]>(() => {
+    if (caseData.revertedQuestions && caseData.revertedQuestions.length > 0) {
+      return caseData.revertedQuestions.map((q) => q.question);
+    }
+    return [
+      "What is your current body temperature reading?",
+      "Have you taken any medication since reporting symptoms?",
+    ];
+  });
   const [newQuestionInput, setNewQuestionInput] = useState<string>("");
 
-  const tabs = [
-    "Overview",
-    "Symptoms & Timeline",
-    "Q&A History",
-    "Medical Reports",
-    "AI Summary",
-    "Activity Log",
-  ];
+  useEffect(() => {
+    if (caseData.revertedQuestions && caseData.revertedQuestions.length > 0) {
+      setRevertedQuestionsList(caseData.revertedQuestions.map((q) => q.question));
+    }
+  }, [caseData.id, caseData.revertedQuestions]);
 
   const actionOptions = [
     {
@@ -300,11 +312,17 @@ export function CaseReviewWorkspace({
           ? (revertedQuestionsList.length > 0
               ? revertedQuestionsList
                   .filter((q) => q.trim().length > 0)
-                  .map((q, idx) => ({
-                    id: `q_${idx + 1}`,
-                    question: q.trim(),
-                    answer: "",
-                  }))
+                  .map((q, idx) => {
+                    const existing = (caseData.revertedQuestions || []).find(
+                      (eq) => eq.question.trim().toLowerCase() === q.trim().toLowerCase() || eq.id === `q_${idx + 1}`
+                    );
+                    return {
+                      id: existing?.id || `q_${idx + 1}`,
+                      question: q.trim(),
+                      answer: existing?.answer || "",
+                      ...(existing?.answered_at ? { answered_at: existing.answered_at } : {}),
+                    };
+                  })
               : undefined)
           : undefined;
 
@@ -362,6 +380,34 @@ export function CaseReviewWorkspace({
     }, 900);
   };
 
+  const normUrgency = (caseData.urgency || "").toLowerCase();
+  const isRed = normUrgency.includes("red") || normUrgency.includes("immed") || normUrgency.includes("emerg");
+  const isAmber = normUrgency.includes("amber") || normUrgency.includes("yellow") || normUrgency.includes("urg") || normUrgency.includes("med");
+
+  const priorityBadge = isRed
+    ? {
+        label: "Red",
+        subtext: "Immediate / High",
+        bg: "bg-rose-50 border-rose-300 text-rose-900",
+        dot: "bg-rose-500 ring-rose-300",
+        tag: "text-rose-700",
+      }
+    : isAmber
+    ? {
+        label: caseData.urgency === "Amber" ? "Amber" : "Amber / Yellow",
+        subtext: "Urgent / Medium",
+        bg: "bg-amber-50 border-amber-300 text-amber-900",
+        dot: "bg-amber-500 ring-amber-300",
+        tag: "text-amber-700",
+      }
+    : {
+        label: "Green",
+        subtext: "Routine / Low",
+        bg: "bg-emerald-50 border-emerald-300 text-emerald-900",
+        dot: "bg-emerald-500 ring-emerald-300",
+        tag: "text-emerald-700",
+      };
+
   return (
     <div className="space-y-5">
       {/* Toast Notification */}
@@ -391,59 +437,46 @@ export function CaseReviewWorkspace({
               <h1 className="text-2xl sm:text-3xl font-black text-slate-900 tracking-tight">
                 Case {caseData.id}
               </h1>
-              <span className="px-2.5 py-0.5 rounded-full text-xs font-bold bg-rose-100 text-rose-800 border border-rose-200">
-                High Priority
-              </span>
-              <span className="px-2.5 py-0.5 rounded-full text-xs font-bold bg-amber-100 text-amber-800 border border-amber-200">
-                {caseData.status}
-              </span>
-              <span className={`px-2.5 py-0.5 rounded-full text-xs font-bold border flex items-center gap-1 ${
-                caseData.consultationMode !== "offline"
-                  ? "bg-teal-50 text-teal-800 border-teal-200"
-                  : "bg-blue-50 text-blue-800 border-blue-200"
-              }`}>
-                {caseData.consultationMode !== "offline" ? "💻 Online Teleconsult" : "🏥 In-Person OPD"}
-              </span>
             </div>
 
             <div className="text-xs sm:text-sm text-slate-600 flex items-center gap-2 flex-wrap">
               <strong className="text-slate-900 font-bold">
                 Patient ID: {caseData.patientId}
               </strong>
-              <span>&bull;</span>
-              <span>Age: {caseData.age}</span>
-              <span>&bull;</span>
-              <span>{caseData.gender}</span>
-              <span>&bull;</span>
-              <span>Location: {caseData.location}</span>
             </div>
           </div>
 
-          <div className="text-left lg:text-right text-xs text-slate-500 shrink-0">
-            <div className="font-semibold text-slate-700">
-              Submitted 21 Sep 2026, 10:24 AM
-            </div>
-            <div className="text-[11px] text-slate-400 mt-0.5">
-              Via Mobile App &bull; Odia &rarr; Translated
-            </div>
-          </div>
-        </div>
-
-        {/* Tabs Row */}
-        <div className="flex items-center gap-1 border-b border-slate-200 pt-1 overflow-x-auto scrollbar-none">
-          {tabs.map((tab) => (
-            <button
-              key={tab}
-              onClick={() => setActiveTab(tab)}
-              className={`px-4 py-2.5 text-xs font-bold border-b-2 whitespace-nowrap transition-colors cursor-pointer ${
-                activeTab === tab
-                  ? "border-teal-700 text-teal-900 font-extrabold"
-                  : "border-transparent text-slate-500 hover:text-slate-800 hover:border-slate-300"
-              }`}
+          <div className="flex flex-wrap items-center gap-3.5 self-start lg:self-center shrink-0">
+            {/* Highlighted Triage Priority Badge */}
+            <div
+              className={`px-3.5 py-1.5 rounded-xl border flex items-center gap-2.5 shadow-2xs ${priorityBadge.bg}`}
             >
-              {tab}
-            </button>
-          ))}
+              <span className={`w-2.5 h-2.5 rounded-full ${priorityBadge.dot} ring-2 animate-pulse shrink-0`} />
+              <div className="flex flex-col text-left">
+                <span className="text-[10px] font-bold uppercase tracking-wider text-slate-500 leading-none">
+                  Triage Priority
+                </span>
+                <div className="flex items-center gap-1.5 mt-0.5">
+                  <span className="text-xs font-black tracking-tight">
+                    {caseData.urgency || priorityBadge.label}
+                  </span>
+                  <span className={`text-[10px] font-bold ${priorityBadge.tag}`}>
+                    ({priorityBadge.subtext})
+                  </span>
+                </div>
+              </div>
+            </div>
+
+            {/* Submitted Metadata */}
+            <div className="text-left lg:text-right text-xs text-slate-500 shrink-0">
+              <div className="font-semibold text-slate-700">
+                Submitted {caseData.submittedTime || "21 Sep 2026, 10:24 AM"}
+              </div>
+              <div className="text-[11px] text-slate-400 mt-0.5">
+                Via Mobile App &bull; {caseData.language ? `${caseData.language} \u2192 Translated` : "Odia \u2192 Translated"}
+              </div>
+            </div>
+          </div>
         </div>
       </div>
 
@@ -451,16 +484,13 @@ export function CaseReviewWorkspace({
       <div className="grid grid-cols-1 lg:grid-cols-12 gap-6 items-start">
         {/* LEFT COLUMN: Clinical Information Cards (7 cols) */}
         <div className="lg:col-span-7 space-y-5">
-          {activeTab === "Overview" ? (
-            <CaseOverviewTab
-              caseData={caseData}
-              setActiveTab={setActiveTab}
-              setReportModalOpen={setReportModalOpen}
-              setMissingModalOpen={setMissingModalOpen}
-            />
-          ) : (
-            <CaseSecondaryTabs activeTab={activeTab} caseData={caseData} />
-          )}
+          <CaseOverviewTab
+            caseData={caseData}
+            setActiveTab={setActiveTab}
+            setReportModalOpen={setReportModalOpen}
+            setMissingModalOpen={setMissingModalOpen}
+            onUpdateCase={onUpdateCase}
+          />
         </div>
 
         {/* RIGHT COLUMN: Review & Actions (5 cols) */}

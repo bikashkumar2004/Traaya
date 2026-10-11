@@ -109,18 +109,20 @@ export default function HealthCampPortalPage() {
   };
 
   return (
-    <div className="min-h-screen bg-[#f4f7fb] text-slate-800 antialiased font-sans pb-16">
+    <div className="min-h-screen bg-[#F3F9F7] text-slate-800 antialiased font-sans pb-16">
       {/* Top Header */}
       <header className="sticky top-0 z-40 bg-white/95 backdrop-blur-md border-b border-slate-200 shadow-xs">
         <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 h-16 flex items-center justify-between">
           <div className="flex items-center gap-3">
             <Link href="/" className="flex items-center gap-2 group">
-              <div className="w-8 h-8 rounded-xl bg-teal-800 text-white flex items-center justify-center font-bold text-sm shadow-xs">
-                <Tent className="w-4 h-4" />
-              </div>
+              <img
+                src="/traaya-logo.png"
+                alt="TRAAYA Logo"
+                className="h-9 w-auto object-contain shrink-0 group-hover:scale-105 transition-transform"
+              />
               <div>
-                <span className="font-extrabold text-base tracking-tight text-slate-900">
-                  Triage<span className="text-teal-700">Assist</span>
+                <span className="font-black text-base tracking-tight text-slate-900">
+                  TRAAYA
                 </span>
                 <span className="text-[10px] font-bold text-teal-800 bg-teal-50 px-2 py-0.5 rounded-full border border-teal-200 ml-2">
                   Temporary Health Camp Station

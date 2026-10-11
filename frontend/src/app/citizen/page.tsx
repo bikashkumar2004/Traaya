@@ -6,6 +6,7 @@ import { supabase, isSupabaseConfigured } from "@/lib/supabase";
 import {
   TriageTicket,
   CareReminder,
+  PatientVitalLog,
   DashboardHeader,
   DashboardReferralAlert,
   DashboardActiveTicketBanner,
@@ -14,13 +15,23 @@ import {
   DashboardRecentTickets,
   DashboardVitalsWidget,
 } from "@/components/patient/dashboard";
+import { RemindersVitalsCard } from "@/components/patient/reminders";
 
 export default function PatientDashboard() {
   const { user } = useAuth();
   const [tickets, setTickets] = useState<TriageTicket[]>([]);
   const [reminders, setReminders] = useState<CareReminder[]>([]);
+  const [latestVitals, setLatestVitals] = useState<PatientVitalLog | null>(null);
   const [loading, setLoading] = useState<boolean>(true);
   const [syncing, setSyncing] = useState<boolean>(false);
+
+  // Quick vitals logger state (connected to database)
+  const [systolic, setSystolic] = useState("");
+  const [diastolic, setDiastolic] = useState("");
+  const [pulse, setPulse] = useState("");
+  const [temperature, setTemperature] = useState("");
+  const [spo2, setSpo2] = useState("");
+  const [vitalsSaved, setVitalsSaved] = useState(false);
 
   // Hydrate cached data from sessionStorage on mount (client-only, after hydration)
   useEffect(() => {
@@ -63,6 +74,22 @@ export default function PatientDashboard() {
         setReminders(incomingReminders);
         if (typeof window !== "undefined") {
           sessionStorage.setItem("triage_cached_reminders", JSON.stringify(incomingReminders));
+        }
+      }
+
+      // 3. Fetch latest vitals telemetry from database (public.patient_vitals_logs)
+      const vitalsRes = await fetch(
+        `/api/patient/reminders/vitals?patient_id=${user.id}`
+      );
+      if (vitalsRes.ok) {
+        const vData = await vitalsRes.json();
+        if (vData.latest) {
+          setLatestVitals(vData.latest);
+          if (vData.latest.systolic != null) setSystolic(String(vData.latest.systolic));
+          if (vData.latest.diastolic != null) setDiastolic(String(vData.latest.diastolic));
+          if (vData.latest.pulse != null) setPulse(String(vData.latest.pulse));
+          if (vData.latest.temperature != null) setTemperature(String(vData.latest.temperature));
+          if (vData.latest.spo2 != null) setSpo2(String(vData.latest.spo2));
         }
       }
     } catch (err) {
@@ -144,6 +171,38 @@ export default function PatientDashboard() {
     return { total, completed, rate, pendingMed, nextConsult, ashaVisit };
   }, [reminders]);
 
+  // Save vitals directly from dashboard to database
+  const handleSaveVitals = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!user?.id) return;
+
+    try {
+      const res = await fetch("/api/patient/reminders/vitals", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          patient_id: user.id,
+          ticket_id: activeTicket?.id,
+          systolic,
+          diastolic,
+          pulse,
+          temperature,
+          spo2,
+        }),
+      });
+      if (res.ok) {
+        const data = await res.json();
+        if (data.vitals) {
+          setLatestVitals(data.vitals);
+        }
+        setVitalsSaved(true);
+        setTimeout(() => setVitalsSaved(false), 3000);
+      }
+    } catch (err) {
+      console.error("[Save Vitals Error]", err);
+    }
+  };
+
   return (
     <div className="space-y-6 max-w-7xl mx-auto pb-12">
       {/* Top Welcome & Citizen Header */}
@@ -185,9 +244,37 @@ export default function PatientDashboard() {
           <DashboardRecentTickets tickets={tickets} />
         </div>
 
-        {/* Right Column (5 Cols) */}
+        {/* Right Column (5 Cols) - Database Driven Vitals Telemetry & Daily Self-Log */}
         <div className="lg:col-span-5 space-y-6">
-          <DashboardVitalsWidget activeTicket={activeTicket} />
+          <DashboardVitalsWidget
+            activeTicket={activeTicket}
+            latestVitals={latestVitals}
+            onOpenLogger={() => {
+              const el = document.getElementById("daily-vitals-logger");
+              if (el) {
+                el.scrollIntoView({ behavior: "smooth" });
+                const firstInput = el.querySelector("input");
+                firstInput?.focus();
+              }
+            }}
+          />
+
+          <div id="daily-vitals-logger">
+            <RemindersVitalsCard
+              systolic={systolic}
+              setSystolic={setSystolic}
+              diastolic={diastolic}
+              setDiastolic={setDiastolic}
+              pulse={pulse}
+              setPulse={setPulse}
+              temperature={temperature}
+              setTemperature={setTemperature}
+              spo2={spo2}
+              setSpo2={setSpo2}
+              vitalsSaved={vitalsSaved}
+              onSaveVitals={handleSaveVitals}
+            />
+          </div>
         </div>
       </div>
     </div>

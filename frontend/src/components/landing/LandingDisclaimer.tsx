@@ -11,7 +11,7 @@ export function LandingDisclaimer() {
         <span>MANDATORY CLINICAL MEDICAL PRACTICE DISCLAIMER</span>
       </div>
       <p className="text-[11px] text-slate-500">
-        <strong>Notice:</strong> TriageAssist is an algorithmic prioritization and tele-triage administrative support tool only. It does not provide medical diagnoses, treatment plans, or emergency triage intervention. The suggestions shown are non-prescriptive assistance mechanisms intended solely to augment registered medical practitioners and are not meant to substitute human clinical judgment in patient care or medical emergencies.
+        <strong>Notice:</strong> TRAAYA is an algorithmic prioritization and tele-triage administrative support tool only. It does not provide medical diagnoses, treatment plans, or emergency triage intervention. The suggestions shown are non-prescriptive assistance mechanisms intended solely to augment registered medical practitioners and are not meant to substitute human clinical judgment in patient care or medical emergencies.
       </p>
     </section>
   );

@@ -72,7 +72,7 @@ function LoginForm() {
       setSetupMode("health_worker");
       setSelectedRole("admin");
       setAuthMethod("email_password");
-      setEmailInput("admin@triageassist.live");
+      setEmailInput("admin@traaya.live");
       setPasswordInput("Triage@2026");
     } else if (
       initialSetupParam === "health_worker" ||
@@ -196,6 +196,7 @@ function LoginForm() {
       cleanDigits === "9999999999" || 
       cleanDigits === "9999900001" || 
       cleanEmail.includes("admin") || 
+      cleanEmail === "admin@traaya.live" ||
       cleanEmail === "admin@triageassist.live" || 
       cleanEmail === "admin@triage.gov.in"
     ) {
@@ -418,9 +419,9 @@ function LoginForm() {
         onAdminLogin={async () => {
           setLoading(true);
           setSelectedRole("admin");
-          setEmailInput("admin@triageassist.live");
+          setEmailInput("admin@traaya.live");
           setPasswordInput("Triage@2026");
-          await loginWithEmailPassword("admin", "admin@triageassist.live", "Triage@2026");
+          await loginWithEmailPassword("admin", "admin@traaya.live", "Triage@2026");
           setLoading(false);
           router.push("/admin");
         }}
@@ -432,7 +433,7 @@ function LoginForm() {
         <LoginBrandPanel setupMode={setupMode} />
 
         {/* RIGHT COLUMN: Interactive Form Interface */}
-        <div className="w-full lg:w-[60%] xl:w-[60%] bg-white flex flex-col justify-center items-center px-6 sm:px-10 lg:px-14 xl:px-20 py-4 h-full overflow-y-auto">
+        <div className="w-full lg:w-[50%] xl:w-[50%] bg-white flex flex-col justify-center items-center px-6 sm:px-10 lg:px-14 xl:px-20 py-4 h-full overflow-y-auto">
           <div className="w-full max-w-[580px] space-y-3.5 my-auto">
             {/* Form Header */}
             <div className="space-y-1.5">
@@ -646,7 +647,7 @@ function LoginForm() {
                     className="w-4 h-4 mt-0.5 rounded border-slate-300 text-teal-700 focus:ring-teal-700 cursor-pointer shrink-0"
                   />
                   <span className="text-xs sm:text-[13px] text-slate-600 leading-snug">
-                    I acknowledge that <strong className="text-slate-900 font-semibold">TriageAssist is an assistive prioritization software</strong>, compliant with Indian Digital Health Standards.
+                    I acknowledge that <strong className="text-slate-900 font-semibold">TRAAYA is an assistive prioritization software</strong>, compliant with Indian Digital Health Standards.
                   </span>
                 </label>
               </div>
@@ -708,7 +709,7 @@ export default function LoginPage() {
         <div className="min-h-screen flex items-center justify-center bg-slate-50">
           <div className="flex items-center gap-2 text-teal-800 font-bold text-sm">
             <span className="w-3 h-3 rounded-full bg-teal-600 animate-ping" />
-            <span>Loading TriageAssist Gateway...</span>
+            <span>Loading TRAAYA Gateway...</span>
           </div>
         </div>
       }

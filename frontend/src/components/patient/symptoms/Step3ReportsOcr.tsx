@@ -1,6 +1,6 @@
 "use client";
 
-import React from "react";
+import React, { useState, useMemo } from "react";
 import {
   RefreshCw,
   Upload,
@@ -11,30 +11,66 @@ import {
   ArrowLeft,
   ArrowRight,
   FileText,
+  Search,
   AlertTriangle,
+  CheckCircle2,
+  AlertCircle,
+  Activity,
+  Calendar,
+  Building2,
+  User,
+  Stethoscope,
+  ChevronDown,
+  ChevronUp,
+  TrendingUp,
+  TrendingDown,
+  Pill,
 } from "lucide-react";
 
 export interface OcrParameter {
   name: string;
   value: string;
   unit: string;
-  reference_range: string;
+  reference_range?: string;
   status: string;
+  alert_level?: string;
+  clinical_significance?: string;
 }
 
-export interface OcrMissingInformation {
-  id: string;
-  question: string;
-  options: string[];
+export interface OcrSection {
+  title: string;
+  items: string[];
+}
+
+export interface OcrSummaryDetails {
+  overview?: string;
+  health_status?: string;
+  urgency?: string;
+  abnormal_findings?: any[];
+  normal_findings?: string[];
+  lifestyle_tips?: string[];
+  clinical_flags?: string[];
 }
 
 export interface OcrData {
-  lab_name: string;
+  patient_name?: string;
+  patient_dob?: string;
+  doctor_name?: string;
+  lab_name?: string;
   test_name: string;
-  report_date: string;
+  report_date?: string;
   parameters: OcrParameter[];
+  sections?: OcrSection[];
+  medical_issues?: string[];
+  treatments?: string[];
+  lifestyle_advice?: string[];
   clinical_flags?: string[];
-  missing_information?: OcrMissingInformation[];
+  patient_summary?: string;
+  summary_details?: OcrSummaryDetails;
+  ai_summary?: string;
+  raw_model_output?: string;
+  model?: string;
+  missing_information?: any[];
 }
 
 export interface UploadedReportInfo {
@@ -51,8 +87,8 @@ export interface Step3ReportsOcrProps {
   setUploadedReport: (val: UploadedReportInfo | null) => void;
   ocrData: OcrData | null;
   setOcrData: (val: OcrData | null) => void;
-  reportInquiryAnswers: Record<string, string>;
-  setReportInquiryAnswers: React.Dispatch<React.SetStateAction<Record<string, string>>>;
+  reportInquiryAnswers?: Record<string, string>;
+  setReportInquiryAnswers?: React.Dispatch<React.SetStateAction<Record<string, string>>>;
   handleFileUpload: (e: React.ChangeEvent<HTMLInputElement>) => void;
   handleLoadSample: (testType: string, filename: string) => void;
   onBack: () => void;
@@ -64,89 +100,112 @@ export interface Step3ReportsOcrProps {
 
 export function Step3ReportsOcr({
   isScanningOcr,
-  extractedSymptoms,
-  symptomText,
   uploadedReport,
   setUploadedReport,
   ocrData,
   setOcrData,
-  reportInquiryAnswers,
-  setReportInquiryAnswers,
   handleFileUpload,
-  handleLoadSample,
   onBack,
   onContinue,
   onSaveDraft,
   isSavingDraft,
   isSubmitting,
 }: Step3ReportsOcrProps) {
-  // Helper to verify if an OCR inquiry question has been answered
-  const isInquiryAnswered = (inqId: string): boolean => {
-    const ans = (reportInquiryAnswers[inqId] || "").trim();
-    if (!ans) return false;
-    if (ans === "Other" || ans === "Other:" || ans === "Other (Please specify)" || ans === "Other: ") {
-      return false;
-    }
-    if (ans.startsWith("Other:") && !ans.replace(/^Other:\s*/, "").trim()) {
-      return false;
-    }
-    return true;
-  };
+  const [filterStatus, setFilterStatus] = useState<"ALL" | "ABNORMAL" | "NORMAL">("ALL");
+  const [searchQuery, setSearchQuery] = useState("");
+  const [showRawOutput, setShowRawOutput] = useState(false);
 
-  const allInquiriesAnswered =
-    !ocrData?.missing_information ||
-    ocrData.missing_information.length === 0 ||
-    ocrData.missing_information.every((inq) => isInquiryAnswered(inq.id));
+  const parameters = useMemo(() => ocrData?.parameters || [], [ocrData]);
+  const sections = useMemo(() => ocrData?.sections || [], [ocrData]);
+
+  // Counts for parameters
+  const abnormalCount = useMemo(
+    () => parameters.filter((p) => p.status === "HIGH" || p.status === "LOW").length,
+    [parameters]
+  );
+  const normalCount = useMemo(
+    () => parameters.filter((p) => p.status === "NORMAL" || !p.status).length,
+    [parameters]
+  );
+
+  // Filtered parameters
+  const filteredParameters = useMemo(() => {
+    return parameters.filter((p) => {
+      const matchesSearch =
+        !searchQuery.trim() ||
+        p.name.toLowerCase().includes(searchQuery.toLowerCase()) ||
+        p.value.toLowerCase().includes(searchQuery.toLowerCase());
+
+      if (!matchesSearch) return false;
+
+      if (filterStatus === "ABNORMAL") {
+        return p.status === "HIGH" || p.status === "LOW";
+      }
+      if (filterStatus === "NORMAL") {
+        return p.status === "NORMAL" || !p.status;
+      }
+      return true;
+    });
+  }, [parameters, searchQuery, filterStatus]);
+
+  // Document summary text directly from model extraction
+  const summaryText =
+    ocrData?.ai_summary ||
+    ocrData?.patient_summary ||
+    ocrData?.summary_details?.overview ||
+    "";
 
   return (
     <div className="bg-white rounded-3xl border border-slate-200/90 shadow-xs p-6 sm:p-8 space-y-6 text-slate-900">
-      <div className="border-b border-slate-100 pb-3">
-        <h2 className="text-lg sm:text-xl font-extrabold text-slate-900">
-          Medical Reports &amp; Laboratory OCR (Optional)
-        </h2>
-        <p className="text-xs text-slate-500 mt-0.5">
-          Upload blood tests, prescriptions, or imaging reports. Questions are generated dynamically by correlating your report with previous symptoms following eSanjeevani teleconsultation standards.
-        </p>
+      {/* Header */}
+      <div className="border-b border-slate-100 pb-3 flex items-center justify-between gap-3 flex-wrap">
+        <div>
+          <h2 className="text-lg sm:text-xl font-extrabold text-slate-900 flex items-center gap-2">
+            <span>Medical Document OCR</span>
+          </h2>
+          <p className="text-xs text-slate-500 mt-0.5">
+            Uploaded document data extracted directly by your custom medical vision model.
+          </p>
+        </div>
       </div>
 
       {/* Scanning in progress loader */}
       {isScanningOcr && (
-        <div className="p-8 bg-teal-50/60 border border-teal-200 rounded-2xl text-center space-y-3 animate-pulse">
+        <div className="p-8 bg-teal-50/70 border border-teal-200 rounded-2xl text-center space-y-3 animate-pulse">
           <div className="w-12 h-12 rounded-full bg-teal-800 text-white flex items-center justify-center mx-auto shadow-sm">
             <RefreshCw className="w-6 h-6 animate-spin" />
           </div>
           <div>
             <h4 className="text-sm font-bold text-teal-950">
-              Scanning Document &amp; Correlating with Clinical History...
+              Processing Document with Medical OCR Model...
             </h4>
             <p className="text-xs text-teal-700 mt-0.5">
-              Cross-referencing report markers with {extractedSymptoms.length > 0 ? extractedSymptoms.join(", ") : "your symptoms"} and previous responses.
+              Extracting patient info, clinical vitals, lab results, diagnoses, and medical summaries.
             </p>
           </div>
         </div>
       )}
 
-      {/* STATE 1: No report uploaded yet (initial state) */}
+      {/* STATE 1: No report uploaded yet */}
       {!uploadedReport && !isScanningOcr && (
         <div className="space-y-6">
-          {/* Upload Dropzone */}
-          <div className="border-2 border-dashed border-slate-300 hover:border-teal-700 bg-slate-50/70 rounded-2xl p-7 text-center space-y-3 transition-colors">
+          <div className="border-2 border-dashed border-slate-300 hover:border-teal-700 bg-slate-50/70 rounded-2xl p-8 text-center space-y-3 transition-colors">
             <div className="w-14 h-14 rounded-2xl bg-teal-50 text-teal-800 border border-teal-200 flex items-center justify-center mx-auto shadow-2xs">
               <Upload className="w-7 h-7" />
             </div>
             <div>
               <div className="text-sm sm:text-base text-slate-900 font-extrabold">
-                Drop your medical document here or browse
+                Upload Medical Report or Document
               </div>
               <p className="text-xs text-slate-500 mt-1 max-w-md mx-auto">
-                Upload lab reports (CBC, LFT, Blood Sugar, KFT, Urinalysis, Prescriptions) in PDF, JPG, or PNG.
+                Upload annual summaries, lab tests, prescriptions, or clinical notes in JPG, PNG, or PDF format.
               </p>
             </div>
 
             <div className="pt-2 flex flex-wrap items-center justify-center gap-3">
               <label className="px-6 py-3 bg-teal-800 hover:bg-teal-900 text-white rounded-xl text-xs sm:text-sm font-bold cursor-pointer inline-flex items-center gap-2 shadow-sm transition-all hover:scale-[1.01] active:scale-95">
                 <Upload className="w-4 h-4" />
-                <span>Browse &amp; Upload Document</span>
+                <span>Browse Document</span>
                 <input
                   type="file"
                   accept=".pdf,.png,.jpg,.jpeg"
@@ -162,24 +221,25 @@ export function Step3ReportsOcr({
       {/* STATE 2: Document uploaded & processed */}
       {uploadedReport && ocrData && !isScanningOcr && (
         <div className="space-y-6">
-          {/* Verified File Header */}
-          <div className="p-4 bg-teal-50/70 border border-teal-200 rounded-2xl flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+          {/* File Header Banner */}
+          <div className="p-4 bg-teal-50/70 border border-teal-200 rounded-2xl flex flex-col sm:flex-row sm:items-center justify-between gap-3 shadow-2xs">
             <div className="flex items-center gap-3">
               <div className="w-10 h-10 rounded-xl bg-teal-800 text-white flex items-center justify-center shrink-0 shadow-2xs">
                 <FileCheck className="w-5 h-5" />
               </div>
               <div>
-                <div className="flex items-center gap-2">
+                <div className="flex items-center gap-2 flex-wrap">
                   <span className="font-extrabold text-sm text-slate-900">
                     {uploadedReport.fileName}
                   </span>
-                  <span className="text-[10px] font-bold text-teal-800 bg-teal-100/80 px-2 py-0.5 rounded-full">
+                  <span className="text-[10px] font-bold text-teal-800 bg-teal-100/90 px-2 py-0.5 rounded-full">
                     {uploadedReport.fileSize}
                   </span>
+                  
                 </div>
-                <div className="text-xs text-emerald-700 font-bold flex items-center gap-1.5 mt-0.5">
-                  <Check className="w-3.5 h-3.5" />
-                  <span>{uploadedReport.status}</span>
+                <div className="text-xs text-slate-600 font-medium flex items-center gap-2 mt-0.5">
+                  <span className="font-bold text-slate-800">{ocrData.test_name}</span>
+                  
                 </div>
               </div>
             </div>
@@ -190,261 +250,282 @@ export function Step3ReportsOcr({
                 onClick={() => {
                   setUploadedReport(null);
                   setOcrData(null);
-                  setReportInquiryAnswers({});
                 }}
                 className="px-3 py-1.5 bg-white hover:bg-rose-50 text-rose-700 border border-slate-200 hover:border-rose-300 rounded-xl text-xs font-bold transition-all cursor-pointer shadow-2xs flex items-center gap-1.5"
               >
                 <X className="w-3.5 h-3.5" />
-                <span>Change / Remove Report</span>
+                <span>Remove Report</span>
               </button>
             </div>
           </div>
 
-          {/* Structured Laboratory Findings */}
-          <div className="p-5 sm:p-6 bg-white border border-slate-200 rounded-2xl shadow-2xs space-y-4">
-            <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 border-b border-slate-100 pb-3">
-              <div>
-                <div className="text-xs font-bold uppercase tracking-wider text-slate-500">
-                  {ocrData.lab_name}
-                </div>
-                <h3 className="text-base sm:text-lg font-extrabold text-slate-900 mt-0.5">
-                  {ocrData.test_name}
-                </h3>
+          {/* Dynamic Metadata Strip (Only displays fields that are present) */}
+          <div className="flex flex-wrap gap-2.5 p-3.5 bg-slate-50/80 rounded-2xl border border-slate-200 text-xs">
+            {ocrData.test_name && (
+              <div className="flex items-center gap-1.5 bg-white border border-slate-200 px-3 py-1.5 rounded-xl shadow-2xs">
+                <FileText className="w-3.5 h-3.5 text-teal-700 shrink-0" />
+                <span className="text-slate-500 font-medium">Document:</span>
+                <strong className="text-slate-800">{ocrData.test_name}</strong>
               </div>
-              <span className="text-xs font-mono text-teal-800 bg-teal-50 px-2.5 py-1 rounded-md border border-teal-200 self-start sm:self-auto font-bold">
-                Report Date: {ocrData.report_date}
-              </span>
-            </div>
+            )}
 
-            {/* Parameters Table */}
-            <div className="divide-y divide-slate-100 text-xs">
-              {ocrData.parameters.map((param, idx) => (
-                <div
-                  key={idx}
-                  className="flex items-center justify-between py-2.5 hover:bg-slate-50/50 px-2 rounded-lg transition-colors"
-                >
-                  <div>
-                    <span className="font-bold text-slate-800">{param.name}</span>
-                    <div className="text-[11px] text-slate-500">
-                      Reference: {param.reference_range} {param.unit}
-                    </div>
-                  </div>
-                  <div className="flex items-center gap-2.5">
-                    <span className="font-mono text-slate-900 font-extrabold text-xs sm:text-sm">
-                      {param.value} {param.unit}
-                    </span>
-                    <span
-                      className={`text-[10px] px-2.5 py-0.5 rounded-full font-bold ${
-                        param.status === "HIGH"
-                          ? "bg-rose-100 text-rose-800 border border-rose-200"
-                          : param.status === "LOW"
-                          ? "bg-amber-100 text-amber-800 border border-amber-200"
-                          : "bg-emerald-100 text-emerald-800 border border-emerald-200"
-                      }`}
-                    >
-                      {param.status}
-                    </span>
-                  </div>
-                </div>
-              ))}
-            </div>
+            {ocrData.patient_name && (
+              <div className="flex items-center gap-1.5 bg-white border border-slate-200 px-3 py-1.5 rounded-xl shadow-2xs">
+                <User className="w-3.5 h-3.5 text-teal-700 shrink-0" />
+                <span className="text-slate-500 font-medium">Patient:</span>
+                <strong className="text-slate-800">{ocrData.patient_name}</strong>
+              </div>
+            )}
 
-            {/* AI Clinical Correlation Findings */}
-            {ocrData.clinical_flags && ocrData.clinical_flags.length > 0 && (
-              <div className="p-4 bg-amber-50/80 rounded-xl border border-amber-200 text-xs text-amber-950 space-y-1.5">
-                <div className="flex items-center gap-2 text-amber-900 font-extrabold text-xs uppercase tracking-wider">
-                  <Sparkles className="w-3.5 h-3.5 text-amber-700" />
-                  <span>AI Clinical Correlation:</span>
-                </div>
-                {ocrData.clinical_flags.map((flag, idx) => (
-                  <div key={idx} className="flex items-start gap-2">
-                    <span className="text-amber-600 font-bold">&bull;</span>
-                    <span className="leading-relaxed">{flag}</span>
-                  </div>
-                ))}
+            {ocrData.patient_dob && (
+              <div className="flex items-center gap-1.5 bg-white border border-slate-200 px-3 py-1.5 rounded-xl shadow-2xs">
+                <Calendar className="w-3.5 h-3.5 text-teal-700 shrink-0" />
+                <span className="text-slate-500 font-medium">DOB:</span>
+                <strong className="text-slate-800">{ocrData.patient_dob}</strong>
+              </div>
+            )}
+
+            {ocrData.doctor_name && (
+              <div className="flex items-center gap-1.5 bg-white border border-slate-200 px-3 py-1.5 rounded-xl shadow-2xs">
+                <Stethoscope className="w-3.5 h-3.5 text-teal-700 shrink-0" />
+                <span className="text-slate-500 font-medium">Doctor:</span>
+                <strong className="text-slate-800">{ocrData.doctor_name}</strong>
+              </div>
+            )}
+
+            {ocrData.lab_name && (
+              <div className="flex items-center gap-1.5 bg-white border border-slate-200 px-3 py-1.5 rounded-xl shadow-2xs">
+                <Building2 className="w-3.5 h-3.5 text-teal-700 shrink-0" />
+                <span className="text-slate-500 font-medium">Facility:</span>
+                <strong className="text-slate-800">{ocrData.lab_name}</strong>
+              </div>
+            )}
+
+            {ocrData.report_date && (
+              <div className="flex items-center gap-1.5 bg-white border border-slate-200 px-3 py-1.5 rounded-xl shadow-2xs">
+                <Calendar className="w-3.5 h-3.5 text-teal-700 shrink-0" />
+                <span className="text-slate-500 font-medium">Date:</span>
+                <strong className="text-slate-800">{ocrData.report_date}</strong>
               </div>
             )}
           </div>
 
-          {/* eSanjeevani Teleconsultation Dynamic Follow-up Inquiries */}
-          {ocrData.missing_information && ocrData.missing_information.length > 0 && (
-            <div className="p-6 bg-slate-50/80 rounded-2xl border border-slate-200 space-y-4">
-              <div className="border-b border-slate-200 pb-3">
+          {/* Model Summary Paragraph */}
+          {summaryText && (
+            <div className="p-4 bg-teal-50/50 rounded-2xl border border-teal-200/80 space-y-2 text-xs">
+              <div className="flex items-center gap-2 text-teal-950 font-bold">
+                <Sparkles className="w-4 h-4 text-teal-700" />
+                <span>Extracted Summary</span>
+              </div>
+              <p className="text-slate-700 leading-relaxed font-normal bg-white/80 p-3 rounded-xl border border-teal-100">
+                {summaryText}
+              </p>
+            </div>
+          )}
+
+          {/* 1. Measured Vitals & Lab Biomarkers (Only shown if parameters exist) */}
+          {parameters.length > 0 && (
+            <div className="p-5 bg-white border border-slate-200 rounded-2xl shadow-2xs space-y-4">
+              <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 border-b border-slate-100 pb-3">
                 <div className="flex items-center gap-2">
-                  <span className="text-[10px] font-bold text-teal-800 bg-teal-100 px-2 py-0.5 rounded uppercase tracking-wider">
-                    eSanjeevani / MoHFW Protocol
-                  </span>
-                  <span className="text-xs text-slate-500 font-medium">
-                    &bull; Dynamic Tele-Triage Inquiries
-                  </span>
+                  <div className="w-7 h-7 rounded-lg bg-teal-800 text-white flex items-center justify-center shrink-0">
+                    <Activity className="w-4 h-4" />
+                  </div>
+                  <h3 className="font-extrabold text-sm sm:text-base text-slate-900">
+                    Review of Vitals and Lab Results ({parameters.length})
+                  </h3>
                 </div>
-                <h4 className="text-sm sm:text-base font-extrabold text-slate-900 mt-1">
-                  Questions About Your Medical Report
-                </h4>
-                <p className="text-xs text-slate-600 mt-0.5">
-                  Please answer these simple questions about your test report and symptoms:
-                </p>
+
+                <div className="flex items-center gap-1.5">
+                  <button
+                    type="button"
+                    onClick={() => setFilterStatus("ALL")}
+                    className={`px-3 py-1 rounded-lg text-xs font-bold transition-all cursor-pointer ${
+                      filterStatus === "ALL"
+                        ? "bg-slate-900 text-white shadow-2xs"
+                        : "bg-slate-100 hover:bg-slate-200 text-slate-700"
+                    }`}
+                  >
+                    All ({parameters.length})
+                  </button>
+                  {abnormalCount > 0 && (
+                    <button
+                      type="button"
+                      onClick={() => setFilterStatus("ABNORMAL")}
+                      className={`px-3 py-1 rounded-lg text-xs font-bold transition-all cursor-pointer flex items-center gap-1 ${
+                        filterStatus === "ABNORMAL"
+                          ? "bg-amber-600 text-white shadow-2xs"
+                          : "bg-amber-50 hover:bg-amber-100 text-amber-800 border border-amber-200"
+                      }`}
+                    >
+                      <span>Abnormal ({abnormalCount})</span>
+                    </button>
+                  )}
+                  {normalCount > 0 && (
+                    <button
+                      type="button"
+                      onClick={() => setFilterStatus("NORMAL")}
+                      className={`px-3 py-1 rounded-lg text-xs font-bold transition-all cursor-pointer flex items-center gap-1 ${
+                        filterStatus === "NORMAL"
+                          ? "bg-emerald-700 text-white shadow-2xs"
+                          : "bg-emerald-50 hover:bg-emerald-100 text-emerald-800 border border-emerald-200"
+                      }`}
+                    >
+                      <span>Normal ({normalCount})</span>
+                    </button>
+                  )}
+                </div>
               </div>
 
-              <div className="space-y-4 text-xs">
-                {ocrData.missing_information.map((inq, inqIdx) => {
-                  const currentAns = (reportInquiryAnswers[inq.id] || "").trim();
-                  const isOtherSelected =
-                    currentAns === "Other" ||
-                    currentAns === "Other (Please specify)" ||
-                    currentAns.startsWith("Other:");
-                  const otherCustomText = isOtherSelected ? currentAns.replace(/^Other:\s*/, "") : "";
-                  const answered = isInquiryAnswered(inq.id);
+              {/* Parameters Table */}
+              <div className="border border-slate-200 rounded-xl overflow-hidden shadow-2xs">
+                <table className="w-full text-left text-xs">
+                  <thead className="bg-slate-100/80 text-slate-600 font-extrabold uppercase text-[10px] tracking-wider border-b border-slate-200">
+                    <tr>
+                      <th className="py-2.5 px-4">Parameter / Metric</th>
+                      <th className="py-2.5 px-4">Extracted Value</th>
+                      {parameters.some((p) => p.reference_range) && (
+                        <th className="py-2.5 px-4">Standard Reference</th>
+                      )}
+                      <th className="py-2.5 px-4 text-right">Status</th>
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-slate-100 bg-white">
+                    {filteredParameters.map((param, idx) => {
+                      const isHigh = param.status === "HIGH";
+                      const isLow = param.status === "LOW";
+                      const isAbnormal = isHigh || isLow;
 
-                  return (
-                    <div
-                      key={inq.id}
-                      className="p-4 sm:p-5 bg-white rounded-2xl border border-slate-200 shadow-2xs space-y-3"
-                    >
-                      <div className="flex items-start gap-2.5">
-                        <span className="w-5 h-5 rounded-full bg-teal-800 text-white text-[10px] font-bold flex items-center justify-center shrink-0 mt-0.5">
-                          {inqIdx + 1}
-                        </span>
-                        <label className="text-slate-900 font-bold block leading-relaxed text-xs sm:text-sm">
-                          {inq.question}
-                        </label>
-                      </div>
-
-                      <div className="space-y-2 pl-7">
-                        {inq.options.map((opt) => {
-                          const isChecked = reportInquiryAnswers[inq.id] === opt;
-                          return (
-                            <button
-                              key={opt}
-                              type="button"
-                              onClick={() =>
-                                setReportInquiryAnswers({
-                                  ...reportInquiryAnswers,
-                                  [inq.id]: opt
-                                })
-                              }
-                              className={`w-full p-3 rounded-xl border text-left flex items-center justify-between gap-3 cursor-pointer transition-all ${
-                                isChecked
-                                  ? "bg-teal-50/80 border-teal-600 text-teal-950 font-bold shadow-2xs ring-1 ring-teal-500"
-                                  : "bg-slate-50/60 border-slate-200 hover:border-slate-300 text-slate-800 hover:bg-slate-100/70"
+                      return (
+                        <tr
+                          key={idx}
+                          className={`transition-colors hover:bg-slate-50/80 ${
+                            isAbnormal ? "bg-amber-50/20" : ""
+                          }`}
+                        >
+                          <td className="py-2.5 px-4 font-bold text-slate-900">
+                            {param.name}
+                          </td>
+                          <td className="py-2.5 px-4">
+                            <span className="font-mono font-bold text-slate-900">
+                              {param.value} {param.unit}
+                            </span>
+                          </td>
+                          {parameters.some((p) => p.reference_range) && (
+                            <td className="py-2.5 px-4 text-slate-600">
+                              {param.reference_range ? `${param.reference_range} ${param.unit}` : "-"}
+                            </td>
+                          )}
+                          <td className="py-2.5 px-4 text-right">
+                            <span
+                              className={`inline-flex items-center gap-1 text-[10px] px-2 py-0.5 rounded-full font-bold uppercase tracking-wider ${
+                                isHigh
+                                  ? "bg-rose-100 text-rose-800 border border-rose-300"
+                                  : isLow
+                                  ? "bg-amber-100 text-amber-800 border border-amber-300"
+                                  : "bg-emerald-100 text-emerald-800 border border-emerald-300"
                               }`}
                             >
-                              <div className="flex items-center gap-2.5">
-                                <div
-                                  className={`w-4 h-4 rounded-full border flex items-center justify-center shrink-0 ${
-                                    isChecked
-                                      ? "border-teal-700 bg-teal-700 text-white"
-                                      : "border-slate-300 bg-white"
-                                  }`}
-                                >
-                                  {isChecked && <Check className="w-2.5 h-2.5 text-white" />}
-                                </div>
-                                <span className="text-xs">{opt}</span>
-                              </div>
-                              {isChecked && (
-                                <span className="text-[10px] font-bold uppercase tracking-wider text-teal-800 bg-teal-100 px-2 py-0.5 rounded">
-                                  Selected
-                                </span>
-                              )}
-                            </button>
-                          );
-                        })}
+                              {isHigh && <TrendingUp className="w-3 h-3 text-rose-700" />}
+                              {isLow && <TrendingDown className="w-3 h-3 text-amber-700" />}
+                              {!isAbnormal && <Check className="w-3 h-3 text-emerald-700" />}
+                              <span>{param.status}</span>
+                            </span>
+                          </td>
+                        </tr>
+                      );
+                    })}
+                  </tbody>
+                </table>
+              </div>
+            </div>
+          )}
 
-                        {/* Other Option with Custom Text Input */}
-                        <div className="pt-1">
-                          <button
-                            type="button"
-                            onClick={() => {
-                              if (!isOtherSelected) {
-                                setReportInquiryAnswers({
-                                  ...reportInquiryAnswers,
-                                  [inq.id]: "Other: "
-                                });
-                              }
-                            }}
-                            className={`w-full p-3 rounded-xl border text-left flex items-center justify-between gap-3 cursor-pointer transition-all ${
-                              isOtherSelected
-                                ? "bg-teal-50/80 border-teal-600 text-teal-950 font-bold shadow-2xs ring-1 ring-teal-500"
-                                : "bg-slate-50/60 border-slate-200 hover:border-slate-300 text-slate-800 hover:bg-slate-100/70"
-                            }`}
-                          >
-                            <div className="flex items-center gap-2.5">
-                              <div
-                                className={`w-4 h-4 rounded-full border flex items-center justify-center shrink-0 ${
-                                  isOtherSelected
-                                    ? "border-teal-700 bg-teal-700 text-white"
-                                    : "border-slate-300 bg-white"
-                                }`}
-                              >
-                                {isOtherSelected && <Check className="w-2.5 h-2.5 text-white" />}
-                              </div>
-                              <span className="text-xs font-semibold">
-                                Other (Type your own answer)
-                              </span>
-                            </div>
-                            {isOtherSelected && (
-                              <span className="text-[10px] font-bold uppercase tracking-wider text-teal-800 bg-teal-100 px-2 py-0.5 rounded">
-                                Selected
-                              </span>
-                            )}
-                          </button>
+          {/* 2. Dynamic Sections (Medical Issues, Treatments, Lifestyle Advice, etc.) */}
+          {sections.length > 0 && (
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+              {sections.map((section, sIdx) => {
+                // If section is vitals and we already showed the table, don't duplicate
+                const secTitleLower = section.title.toLowerCase();
+                const isVitalsSec = secTitleLower.includes("vital") || secTitleLower.includes("lab result");
+                if (isVitalsSec && parameters.length > 0) return null;
 
-                          {isOtherSelected && (
-                            <div className="mt-2 p-3 bg-slate-100/80 rounded-xl border border-teal-300/80 space-y-1.5 animate-in fade-in duration-200">
-                              <label className="text-[11px] font-bold text-teal-900 block">
-                                Type your answer here in simple words:
-                              </label>
-                              <input
-                                type="text"
-                                autoFocus
-                                value={otherCustomText}
-                                onChange={(e) => {
-                                  const val = e.target.value;
-                                  setReportInquiryAnswers({
-                                    ...reportInquiryAnswers,
-                                    [inq.id]: val.trim() ? `Other: ${val}` : "Other: "
-                                  });
-                                }}
-                                placeholder="Type your answer here..."
-                                className="w-full p-2.5 bg-white border border-slate-300 rounded-xl text-slate-900 text-xs font-medium focus:ring-2 focus:ring-teal-700/20 focus:border-teal-700 shadow-2xs"
-                              />
-                              {!otherCustomText.trim() && (
-                                <p className="text-[11px] text-amber-700 font-bold flex items-center gap-1 pt-0.5">
-                                  <AlertTriangle className="w-3.5 h-3.5 text-amber-600 shrink-0" />
-                                  <span>Please type your answer in the box above to continue.</span>
-                                </p>
-                              )}
-                            </div>
-                          )}
+                const isIssues = secTitleLower.includes("issue") || secTitleLower.includes("diagnos");
+                const isTreatments = secTitleLower.includes("treatment") || secTitleLower.includes("medication") || secTitleLower.includes("hospital");
+
+                return (
+                  <div
+                    key={sIdx}
+                    className="p-4 bg-white rounded-2xl border border-slate-200 shadow-2xs space-y-3"
+                  >
+                    <div className="flex items-center gap-2 border-b border-slate-100 pb-2">
+                      {isIssues ? (
+                        <div className="w-6 h-6 rounded-md bg-amber-100 text-amber-800 flex items-center justify-center shrink-0">
+                          <AlertTriangle className="w-3.5 h-3.5" />
                         </div>
-                      </div>
-
-                      {!answered && (
-                        <div className="flex items-center gap-2 p-2.5 bg-amber-50 border border-amber-200 rounded-xl text-amber-800 text-[11px] font-semibold mt-2">
-                          <AlertTriangle className="w-3.5 h-3.5 text-amber-600 shrink-0" />
-                          <span>Please pick or type an answer for question #{inqIdx + 1}.</span>
+                      ) : isTreatments ? (
+                        <div className="w-6 h-6 rounded-md bg-teal-100 text-teal-800 flex items-center justify-center shrink-0">
+                          <Pill className="w-3.5 h-3.5" />
+                        </div>
+                      ) : (
+                        <div className="w-6 h-6 rounded-md bg-slate-100 text-slate-700 flex items-center justify-center shrink-0">
+                          <FileText className="w-3.5 h-3.5" />
                         </div>
                       )}
+                      <h4 className="font-extrabold text-xs sm:text-sm text-slate-900">
+                        {section.title}
+                      </h4>
                     </div>
-                  );
-                })}
-              </div>
+
+                    <div className="space-y-1.5 text-xs">
+                      {section.items.map((item, itemIdx) => (
+                        <div
+                          key={itemIdx}
+                          className="flex items-start gap-2 p-2 bg-slate-50/70 rounded-lg text-slate-800 leading-snug"
+                        >
+                          <span className="text-teal-700 font-bold shrink-0 mt-0.5">&bull;</span>
+                          <span className="font-medium">{item}</span>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+          )}
+
+          {/* 3. Raw Model Extraction Toggle */}
+          {ocrData.raw_model_output && (
+            <div className="border border-slate-200 rounded-2xl overflow-hidden bg-slate-50/50">
+              <button
+                type="button"
+                onClick={() => setShowRawOutput(!showRawOutput)}
+                className="w-full px-4 py-3 text-left font-bold text-xs text-slate-700 hover:text-slate-900 flex items-center justify-between cursor-pointer transition-colors"
+              >
+                <div className="flex items-center gap-2">
+                  <FileText className="w-4 h-4 text-teal-700" />
+                  <span>Verbatim Model Extraction Output</span>
+                </div>
+                {showRawOutput ? (
+                  <ChevronUp className="w-4 h-4 text-slate-400" />
+                ) : (
+                  <ChevronDown className="w-4 h-4 text-slate-400" />
+                )}
+              </button>
+
+              {showRawOutput && (
+                <div className="p-4 border-t border-slate-200 bg-white">
+                  <pre className="p-4 bg-slate-900 text-slate-100 rounded-xl text-xs font-mono whitespace-pre-wrap leading-relaxed overflow-x-auto max-h-96">
+                    {ocrData.raw_model_output}
+                  </pre>
+                </div>
+              )}
             </div>
           )}
         </div>
       )}
 
-      {/* Warning banner if report inquiries are not answered */}
-      {!allInquiriesAnswered && (
-        <div className="flex items-center gap-2.5 p-3.5 bg-amber-50 border border-amber-300 rounded-xl text-amber-900 text-xs font-bold">
-          <AlertTriangle className="w-4 h-4 text-amber-600 shrink-0" />
-          <span>
-            Please answer all the report questions above before going to the next step.
-          </span>
-        </div>
-      )}
-
-      {/* Navigation */}
+      {/* Navigation Buttons */}
       <div className="flex items-center justify-between pt-4 border-t border-slate-100">
         <button
           type="button"
@@ -468,17 +549,8 @@ export function Step3ReportsOcr({
 
           <button
             type="button"
-            onClick={() => {
-              if (allInquiriesAnswered) {
-                onContinue();
-              }
-            }}
-            disabled={!allInquiriesAnswered}
-            className={`px-6 py-2.5 font-bold text-xs sm:text-sm rounded-xl flex items-center gap-2 shadow-sm transition-all ${
-              allInquiriesAnswered
-                ? "bg-teal-800 hover:bg-teal-900 text-white cursor-pointer"
-                : "bg-slate-200 text-slate-400 border border-slate-300 cursor-not-allowed opacity-60"
-            }`}
+            onClick={onContinue}
+            className="px-6 py-2.5 bg-teal-800 hover:bg-teal-900 text-white font-bold text-xs sm:text-sm rounded-xl flex items-center gap-2 shadow-sm transition-all cursor-pointer hover:scale-[1.01] active:scale-95"
           >
             <span>Continue to Address</span>
             <ArrowRight className="w-4 h-4" />

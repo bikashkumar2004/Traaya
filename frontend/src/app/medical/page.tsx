@@ -891,7 +891,7 @@ export default function MedicalPortalPage() {
   ];
 
   return (
-    <div className="flex min-h-screen bg-[#f4f7fb] text-slate-800 antialiased font-sans">
+    <div className="flex min-h-screen bg-[#F3F9F7] text-slate-800 antialiased font-sans">
       {/* Toast Notification */}
       {toastMessage && (
         <div className="fixed top-5 right-5 z-50 flex items-center gap-2.5 px-4 py-3 bg-teal-800 text-white rounded-xl shadow-xl border border-teal-700 text-xs font-bold animate-in fade-in slide-in-from-top-4">
@@ -908,9 +908,9 @@ export default function MedicalPortalPage() {
         />
       )}
 
-      {/* LEFT SIDEBAR (Doctor-style soft blue layout #EAF1FF) */}
+      {/* LEFT SIDEBAR (Doctor-style soft blue layout #ffffff) */}
       <aside
-        className={`fixed inset-y-0 left-0 z-40 w-64 h-screen bg-[#EAF1FF] text-slate-800 flex flex-col justify-between border-r border-blue-200/70 transition-transform duration-200 ${
+        className={`fixed inset-y-0 left-0 z-40 w-64 h-screen bg-[#ffffff] text-slate-800 flex flex-col justify-between border-r border-blue-200/70 transition-transform duration-200 ${
           mobileSidebarOpen ? "translate-x-0 shadow-2xl z-50" : "-translate-x-full lg:translate-x-0"
         }`}
       >
@@ -918,14 +918,16 @@ export default function MedicalPortalPage() {
           {/* Top Brand Header */}
           <div className="p-4 border-b border-blue-200/60 flex items-center justify-between shrink-0">
             <Link href="/medical" className="flex items-center gap-2.5 group">
-              <div className="w-8 h-8 rounded-xl bg-teal-700 flex items-center justify-center text-white shadow-xs group-hover:scale-105 transition-transform shrink-0">
-                <Stethoscope className="w-4 h-4" />
-              </div>
+              <img
+                src="/traaya-logo.png"
+                alt="TRAAYA Logo"
+                className="h-9 w-auto object-contain shrink-0 group-hover:scale-105 transition-transform"
+              />
               <div className="flex flex-col min-w-0">
-                <span className="font-extrabold text-base tracking-tight text-slate-900 leading-tight">
-                  Triage<span className="text-teal-700">Assist</span>
+                <span className="font-black text-base tracking-tight text-slate-900 leading-tight">
+                  TRAAYA
                 </span>
-                <span className="text-[10px] font-semibold text-teal-800 tracking-wide leading-none mt-1">
+                <span className="text-[10px] font-semibold text-teal-800 tracking-wide leading-none mt-0.5">
                   Medical Facility Station
                 </span>
               </div>
