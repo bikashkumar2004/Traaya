@@ -10,8 +10,15 @@ import {
   DoctorProfileDetails,
   DoctorProfileCompetencies,
 } from "./profile";
+import { CaseDetails } from "@/components/nurse/CaseReviewWorkspace";
+import { ReviewedCaseRecord } from "./DoctorReviewHistoryView";
 
-export function DoctorProfileView() {
+interface DoctorProfileViewProps {
+  queueCases?: CaseDetails[];
+  reviewedCases?: ReviewedCaseRecord[];
+}
+
+export function DoctorProfileView({ queueCases, reviewedCases }: DoctorProfileViewProps = {}) {
   const { user, updateProfile } = useAuth();
   const [editMode, setEditMode] = useState<boolean>(false);
   const [saving, setSaving] = useState<boolean>(false);
@@ -101,7 +108,12 @@ export function DoctorProfileView() {
         }
 
         if (liveStats) {
-          setStats(liveStats);
+          setStats((prev) => ({
+            activeCases: prev.activeCases > 0 ? prev.activeCases : liveStats.activeCases,
+            emergencyReferrals: prev.emergencyReferrals > 0 ? prev.emergencyReferrals : liveStats.emergencyReferrals,
+            completeCases: prev.completeCases > 0 ? prev.completeCases : liveStats.completeCases,
+            teleconsults: prev.teleconsults > 0 ? prev.teleconsults : liveStats.teleconsults,
+          }));
         }
       }
     } catch (err) {
@@ -114,6 +126,64 @@ export function DoctorProfileView() {
   useEffect(() => {
     loadProfileFromDatabase();
   }, [loadProfileFromDatabase]);
+
+  // Synchronize clinical stats from live cases (props or cached state)
+  useEffect(() => {
+    let liveQueue = queueCases;
+    let liveReviewed = reviewedCases;
+
+    if (!liveQueue || liveQueue.length === 0) {
+      if (typeof window !== "undefined") {
+        try {
+          const cached = sessionStorage.getItem("triage_cached_doctor_queue");
+          if (cached) liveQueue = JSON.parse(cached);
+        } catch {}
+      }
+    }
+
+    if (!liveReviewed || liveReviewed.length === 0) {
+      if (typeof window !== "undefined") {
+        try {
+          const cached = sessionStorage.getItem("triage_cached_doctor_reviewed");
+          if (cached) liveReviewed = JSON.parse(cached);
+        } catch {}
+      }
+    }
+
+    const q = liveQueue || [];
+    const r = liveReviewed || [];
+
+    if (q.length > 0 || r.length > 0) {
+      const activeCount = q.length;
+      const refCount = r.filter(
+        (c) =>
+          c.category === "Referred" ||
+          c.status === "Referred" ||
+          (c.doctorDecision && c.doctorDecision.toLowerCase().includes("refer"))
+      ).length;
+      const compCount = r.filter(
+        (c) =>
+          c.category === "Complete" ||
+          c.status === "Completed" ||
+          c.status === "Complete" ||
+          (c.status && c.status.toLowerCase().includes("discharge")) ||
+          (c.doctorDecision && !c.doctorDecision.toLowerCase().includes("refer"))
+      ).length;
+      const teleCount = [...q, ...r].filter(
+        (c) =>
+          c.consultationMode === "online" ||
+          c.consultationMode === "teleconsult" ||
+          ((c as any).doctorNotes && (c as any).doctorNotes.toLowerCase().includes("teleconsult"))
+      ).length;
+
+      setStats({
+        activeCases: activeCount,
+        emergencyReferrals: refCount,
+        completeCases: compCount,
+        teleconsults: teleCount,
+      });
+    }
+  }, [queueCases, reviewedCases]);
 
   // Synchronize when the auth context user changes
   useEffect(() => {

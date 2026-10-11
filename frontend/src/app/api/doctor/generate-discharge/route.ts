@@ -12,7 +12,8 @@ export interface DischargeReportPayload {
   documentVersion: string;
   documentCategory: string;
   issueDate: string;
-  hospitalName: string;
+  facilityName: string;
+  hospitalName?: string;
   hospitalAddress: string;
   contactInfo: string;
   patientDetails: {
@@ -64,6 +65,9 @@ function buildFallbackReport(params: {
   vitals?: any;
   doctorNotes?: string;
   doctorName?: string;
+  facilityName?: string;
+  facilityAddress?: string;
+  facilityContact?: string;
 }): DischargeReportPayload {
   const {
     patientName,
@@ -78,6 +82,9 @@ function buildFallbackReport(params: {
     vitals,
     doctorNotes,
     doctorName,
+    facilityName = "Jan Aushadhi Kendra",
+    facilityAddress = "Hospital Road, Main CHC Campus, Khandapada, Nayagarh, Odisha - 752077",
+    facilityContact = "Ph: +91 9437106689 | E-mail: facility.khandapada.6689@triageassist.org",
   } = params;
 
   const complaintStr = chiefComplaint || (symptoms.length > 0 ? symptoms.join(", ") : "Acute febrile presentation");
@@ -191,9 +198,10 @@ function buildFallbackReport(params: {
     documentVersion: "01",
     documentCategory: "Format",
     issueDate: "01/2025",
-    hospitalName: "Community Health Centre (CHC) Khandapada",
-    hospitalAddress: "Main Hospital Road, Khandapada Block, Nayagarh District, Odisha - 752077",
-    contactInfo: "Ph: +91 6757-230244 | E-mail: triage.chc.khandapada@odisha.gov.in",
+    facilityName,
+    hospitalName: facilityName,
+    hospitalAddress: facilityAddress,
+    contactInfo: facilityContact,
     patientDetails: {
       name: patientName || "Patient",
       ageSex: `${age || "35"} Yrs / ${gender || "Not specified"}`,
@@ -212,7 +220,7 @@ function buildFallbackReport(params: {
     prescribedMedications: medications,
     followUpInstructions: {
       recommendedFollowUp:
-        "Routine OPD Follow-up at CHC Khandapada or nearest Primary Health Centre (PHC).",
+        `Routine OPD Follow-up at ${facilityName} or nearest Primary Health Centre (PHC).`,
       nextFollowUpDate: "In 5 days (or earlier SOS if red-flag symptoms develop)",
       lifestyleDietaryInstructions:
         "Take plenty of boiled & cooled fluids (minimum 2.5-3 Litres daily). Avoid spicy, oily, or unhygienic roadside foods. Continue oral medications strictly as scheduled. Maintain good personal hygiene and adequate rest.",
@@ -221,7 +229,7 @@ function buildFallbackReport(params: {
       name: doctorName || "Dr. Kavita Verma, MD",
       qualification: "MBBS, MD (Medicine)",
       regNo: "MCI-OD-2012-7889",
-      contact: "CHC Khandapada OPD Room 102",
+      contact: `${facilityName} OPD Room 102`,
     },
     disclaimer: DEFAULT_DISCLAIMER,
   };
@@ -244,6 +252,9 @@ export async function POST(req: NextRequest) {
       doctorNotes = "",
       doctorName = "Dr. Kavita Verma, MD",
       doctorRegNo = "MCI-OD-2012-7889",
+      facilityName = "Jan Aushadhi Kendra",
+      facilityAddress = "Hospital Road, Main CHC Campus, Khandapada, Nayagarh, Odisha - 752077",
+      facilityContact = "Ph: +91 9437106689 | E-mail: facility.khandapada.6689@triageassist.org",
     } = body;
 
     const groqApiKey = process.env.GROQ_API_KEY || process.env.NEXT_PUBLIC_GROQ_API_KEY;
@@ -263,13 +274,16 @@ export async function POST(req: NextRequest) {
         vitals,
         doctorNotes,
         doctorName,
+        facilityName,
+        facilityAddress,
+        facilityContact,
       });
       return NextResponse.json({ success: true, report: fallback, model: "standard-nabh-generator" });
     }
 
     // Call Groq API with gpt-oss-120b model as specified by user
-    const systemPrompt = `You are a licensed senior medical officer at Community Health Centre (CHC) Khandapada, Nayagarh, Odisha.
-Generate an official NABH-standard Hospital Discharge Summary formatted strictly according to Document ID: E-Mitra/FORMAT/04/V1.0.
+    const systemPrompt = `You are a licensed senior medical officer at ${facilityName}, Nayagarh, Odisha.
+Generate an official NABH-standard Hospital Discharge Report formatted strictly according to Document ID: E-Mitra/FORMAT/04/V1.0.
 
 You MUST output ONLY a valid JSON object matching the following TypeScript schema with NO markdown ticks, NO commentary:
 {
@@ -277,9 +291,10 @@ You MUST output ONLY a valid JSON object matching the following TypeScript schem
   "documentVersion": "01",
   "documentCategory": "Format",
   "issueDate": "01/2025",
-  "hospitalName": "Community Health Centre (CHC) Khandapada",
-  "hospitalAddress": "Main Hospital Road, Khandapada Block, Nayagarh District, Odisha - 752077",
-  "contactInfo": "Ph: +91 6757-230244 | E-mail: triage.chc.khandapada@odisha.gov.in",
+  "facilityName": "${facilityName}",
+  "hospitalName": "${facilityName}",
+  "hospitalAddress": "${facilityAddress}",
+  "contactInfo": "${facilityContact}",
   "patientDetails": {
     "name": string,
     "ageSex": string,

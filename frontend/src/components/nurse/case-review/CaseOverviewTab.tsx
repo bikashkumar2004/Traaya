@@ -105,29 +105,146 @@ export function CaseOverviewTab({
   };
 
   const rawQaList: Array<{ question: string; answer: string }> = (() => {
-    const list =
-      caseData.symptomsData?.raw_qa ||
-      (caseData as any).symptoms_data?.raw_qa;
-    if (Array.isArray(list) && list.length > 0) {
-      return list
+    const sdata =
+      (caseData.symptomsData && typeof caseData.symptomsData === "object"
+        ? caseData.symptomsData
+        : {}) as any;
+    const directSdata =
+      ((caseData as any).symptoms_data && typeof (caseData as any).symptoms_data === "object"
+        ? (caseData as any).symptoms_data
+        : {}) as any;
+
+    const questionLabels: Record<string, string> = {
+      fever_duration: "How many days have you had these symptoms / fever?",
+      duration: "How many days have you had these symptoms?",
+      headache_severity: "How severe is the headache / pain?",
+      pain_severity: "How severe is the pain / discomfort?",
+      weakness_severity: "How severe is the weakness or fatigue?",
+      severity: "How severe are your primary symptoms?",
+      daily_persistence: "How long does the discomfort persist during the day?",
+      associated_symptoms: "Are there any associated symptoms (nausea, cough, body ache)?",
+      associated: "Are there any associated symptoms?",
+      fever_and_chills: "Are high fever, shivering, or chills present?",
+      red_flags: "Are any red flag emergency warning signs present?",
+      recurrence_frequency: "How often does the symptom or episode recur?",
+      onset: "When and how suddenly did your symptoms start?",
+    };
+
+    // 1. Try raw_qa array
+    const rawQaCandidate = sdata.raw_qa || directSdata.raw_qa || (caseData as any).raw_qa;
+    let list: any[] = [];
+    if (Array.isArray(rawQaCandidate) && rawQaCandidate.length > 0) {
+      list = rawQaCandidate;
+    } else if (typeof rawQaCandidate === "string") {
+      try {
+        const parsed = JSON.parse(rawQaCandidate);
+        if (Array.isArray(parsed)) list = parsed;
+      } catch {}
+    }
+
+    if (list.length > 0) {
+      const parsedList = list
         .map((item: any) => ({
-          question: typeof item === "object" ? item.question || item.q || "" : String(item),
-          answer: typeof item === "object" ? item.answer || item.a || "" : "",
+          question: typeof item === "object" ? item.question || item.q || item.title || "" : String(item),
+          answer: typeof item === "object" ? item.answer || item.a || item.val || "" : "",
         }))
         .filter((item: { question: string; answer: string }) => item.question && item.answer);
+
+      if (parsedList.length > 0) return parsedList;
     }
 
-    const qaMap =
-      caseData.symptomsData?.questions_answers ||
-      (caseData as any).symptoms_data?.questions_answers;
+    // 2. Try follow_up_questions paired with follow_up_answers
+    const fQuestions = sdata.follow_up_questions || directSdata.follow_up_questions || (caseData as any).follow_up_questions;
+    const fAnswers = sdata.follow_up_answers || directSdata.follow_up_answers || (caseData as any).follow_up_answers;
+    if (Array.isArray(fQuestions) && fQuestions.length > 0 && typeof fAnswers === "object" && fAnswers !== null) {
+      const paired: Array<{ question: string; answer: string }> = [];
+      for (const fq of fQuestions) {
+        const qText = fq.question || fq.title || fq.prompt || "";
+        const qId = fq.id || "";
+        const ans = fAnswers[qId] ?? fAnswers[qText];
+        if (ans !== undefined && ans !== null && String(ans).trim() !== "") {
+          const unit = fq.unit || "";
+          paired.push({
+            question: qText || qId,
+            answer: String(ans).trim() + (unit && !String(ans).includes(unit) ? ` ${unit}` : ""),
+          });
+        }
+      }
+      if (paired.length > 0) return paired;
+    }
+
+    // 3. Try questions_answers map
+    let qaMap = sdata.questions_answers || directSdata.questions_answers || (caseData as any).questions_answers;
+    if (typeof qaMap === "string") {
+      try {
+        qaMap = JSON.parse(qaMap);
+      } catch {}
+    }
+
     if (typeof qaMap === "object" && qaMap !== null && Object.keys(qaMap).length > 0) {
-      return Object.entries(qaMap).map(([k, v]) => ({
-        question: k.replace(/_/g, " ").replace(/\b\w/g, (c) => c.toUpperCase()),
-        answer: String(v),
-      }));
+      const entries = Object.entries(qaMap)
+        .filter(([k, v]) => k !== "reverted_questions" && v !== undefined && v !== null && String(v).trim() !== "")
+        .map(([k, v]) => {
+          const cleanK = k.toLowerCase().trim();
+          const naturalQ = questionLabels[cleanK] || k.replace(/_/g, " ").replace(/\b\w/g, (c) => c.toUpperCase()) + "?";
+          return {
+            question: naturalQ,
+            answer: String(v),
+          };
+        });
+
+      if (entries.length > 0) return entries;
     }
 
-    return [];
+    // 4. Try parsing questions from summary
+    const summaryCandidate = sdata.summary || directSdata.summary || (caseData as any).clinical_summary || "";
+    if (summaryCandidate && (summaryCandidate.includes("?:") || summaryCandidate.includes("Q:") || summaryCandidate.includes("?"))) {
+      const regex = /(?:Q:|\d+[\.\)]\s*|\b)([^\?\n]+\?)\s*(?:A:|:)?\s*([^\n\?]+)/gi;
+      const parsedFromSummary: Array<{ question: string; answer: string }> = [];
+      let match;
+      while ((match = regex.exec(summaryCandidate)) !== null) {
+        const q = match[1].trim();
+        const a = match[2].trim();
+        if (q.length > 5 && a.length > 0) {
+          parsedFromSummary.push({ question: q, answer: a });
+        }
+      }
+      if (parsedFromSummary.length > 0) return parsedFromSummary;
+    }
+
+    // 5. Fallback: Reconstruct from aiInfo / intake parameters if available
+    const fallbackList: Array<{ question: string; answer: string }> = [];
+    const durationVal = caseData.aiInfo?.duration || sdata.duration || directSdata.duration;
+    const severityVal = caseData.aiInfo?.severity || sdata.severity || directSdata.severity;
+    const associatedVal = caseData.aiInfo?.associated || sdata.associated || directSdata.associated;
+    const redFlagsVal = caseData.aiInfo?.redFlags || sdata.red_flags || directSdata.red_flags;
+
+    if (durationVal) {
+      fallbackList.push({
+        question: "How many days have you had these symptoms? (Duration)",
+        answer: durationVal,
+      });
+    }
+    if (severityVal) {
+      fallbackList.push({
+        question: "How severe is the pain or discomfort? (Severity)",
+        answer: severityVal,
+      });
+    }
+    if (associatedVal && associatedVal !== "None") {
+      fallbackList.push({
+        question: "Are there any associated symptoms?",
+        answer: associatedVal,
+      });
+    }
+    if (redFlagsVal && redFlagsVal !== "None detected yet") {
+      fallbackList.push({
+        question: "Are any red flag emergency warning signs present?",
+        answer: redFlagsVal,
+      });
+    }
+
+    return fallbackList;
   })();
 
   const normalizedRevertedQuestions = useMemo(() => {

@@ -279,7 +279,12 @@ async def get_nurse_queue(facility_id: Optional[str] = None, facility_name: Opti
                 ])(t.get("reverted_questions")),
                 "referalFacility": t.get("referal_facility"),
                 "referalFacilityId": t.get("referal_facility_id"),
-                "transferReason": t.get("transfer_reason")
+                "transferReason": t.get("transfer_reason"),
+                "updatedAt": t.get("updated_at"),
+                "createdAt": t.get("created_at"),
+                "updated_at": t.get("updated_at"),
+                "created_at": t.get("created_at"),
+                "reviewedAt": t.get("updated_at"),
             }
             formatted_cases.append(formatted_case)
 

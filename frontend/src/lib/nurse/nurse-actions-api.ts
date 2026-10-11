@@ -1,4 +1,5 @@
 import { supabase } from "@/lib/supabase";
+import { buildAutoResolveNotes } from "@/lib/doctor/doctor-resolve-notes";
 
 const API_BASE = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000";
 
@@ -256,7 +257,7 @@ export async function submitLiveNurseAction(payload: {
     try {
       const { data: tData } = await supabase
         .from("triage_tickets")
-        .select("id, status")
+        .select("id, status, symptoms_data, chief_complaint")
         .eq("case_number", payload.case_number)
         .single();
 
@@ -274,7 +275,14 @@ export async function submitLiveNurseAction(payload: {
         }
 
         if (normalizedStatus === "Completed" || payload.action_type === "Resolve") {
-          updatePayload.resolve_notes = payload.review_note;
+          if (payload.review_note && payload.review_note.includes("stable hemodynamics")) {
+            updatePayload.resolve_notes = payload.review_note;
+          } else {
+            updatePayload.resolve_notes = buildAutoResolveNotes({
+              chiefComplaint: tData.chief_complaint,
+              symptomsData: tData.symptoms_data,
+            }, payload.review_note);
+          }
         }
         if (payload.schedule_time || normalizedStatus === "Scheduled") {
           updatePayload.schedule_time = payload.schedule_time || new Date(Date.now() + 2 * 3600 * 1000).toISOString();

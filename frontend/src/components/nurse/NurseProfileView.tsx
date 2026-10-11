@@ -243,10 +243,6 @@ export function NurseProfileView() {
                 <h1 className="text-xl sm:text-2xl font-black text-slate-900 tracking-tight">
                   {fullName}
                 </h1>
-                <span className="px-2.5 py-0.5 rounded-full text-[10px] font-bold bg-emerald-100 text-emerald-800 border border-emerald-300 flex items-center gap-1">
-                  <ShieldCheck className="w-3.5 h-3.5" />
-                  <span>ABDM HPR Verified</span>
-                </span>
               </div>
 
               <div className="text-xs font-semibold text-teal-800">

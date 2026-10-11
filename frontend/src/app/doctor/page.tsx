@@ -11,6 +11,7 @@ import { DoctorProfileView } from "@/components/doctor/DoctorProfileView";
 import { CaseDetails } from "@/components/nurse/CaseReviewWorkspace";
 import { FacilityAvailabilityView } from "@/components/nurse/FacilityAvailabilityView";
 import { fetchLiveNurseQueue, submitLiveNurseAction } from "@/lib/nurse-api";
+import { buildAutoResolveNotes } from "@/lib/doctor/doctor-resolve-notes";
 import { supabase, isSupabaseConfigured } from "@/lib/supabase";
 import { useAuth } from "@/lib/auth-context";
 import { CheckCircle2, RefreshCw } from "lucide-react";
@@ -35,7 +36,34 @@ function DoctorPortalContent() {
       const cachedQueue = sessionStorage.getItem("triage_cached_doctor_queue");
       if (cachedQueue) setQueueCases(JSON.parse(cachedQueue));
       const cachedReviewed = sessionStorage.getItem("triage_cached_doctor_reviewed");
-      if (cachedReviewed) setReviewedCases(JSON.parse(cachedReviewed));
+      if (cachedReviewed) {
+        const parsed = JSON.parse(cachedReviewed);
+        const sanitized = parsed.map((item: any) => {
+          const rawUpdated = item.updatedAt || item.updated_at;
+          if (rawUpdated) {
+            try {
+              const d = new Date(rawUpdated);
+              if (!isNaN(d.getTime())) {
+                return {
+                  ...item,
+                  reviewedAt: d.toLocaleString([], {
+                    month: "short",
+                    day: "numeric",
+                    year: "numeric",
+                    hour: "2-digit",
+                    minute: "2-digit",
+                  }),
+                };
+              }
+            } catch {}
+          }
+          if (item.reviewedAt && item.reviewedAt.includes("ago")) {
+            return { ...item, reviewedAt: "Recently" };
+          }
+          return item;
+        });
+        setReviewedCases(sanitized);
+      }
     } catch {}
   }, []);
 
@@ -151,46 +179,45 @@ function DoctorPortalContent() {
 
             return Boolean(matchesDoctor);
           })
-          .map((item: CaseDetails) => ({
-            id: item.id,
-            patientId: item.patientId,
-            name: item.name,
-            age: item.age,
-            gender: item.gender,
-            phone: item.phone,
-            location: item.location,
-            language: item.language,
-            consent: item.consent,
-            quickNotes: item.quickNotes,
-            submittedTime: item.submittedTime,
-            urgency: item.urgency,
-            urgencyClass: item.urgencyClass,
-            status: item.status,
-            category: item.status === "Referred" ? "Referred" : "Complete",
-            chiefComplaint: item.chiefComplaint,
-            aiInfo: item.aiInfo,
-            missingDetails: item.missingDetails,
-            reports: item.reports,
-            aiReportAnalysis: item.aiReportAnalysis,
-            aiSuggestion: item.aiSuggestion,
-            facility: item.facility,
-            facilityLocation: item.facilityLocation,
-            consultationMode: item.consultationMode,
-            scheduleTime: item.scheduleTime,
-            referalFacility: item.referalFacility,
-            transferReason: item.transferReason,
-            doctorId: item.doctorId,
-            doctorName: item.doctorName,
-            doctorDiagnosis: item.quickNotes || "Physician verified clinical encounter",
-            doctorDecision:
-              item.status === "Referred"
-                ? `Refer (${item.referalFacility || "Hospital"})`
-                : "Generate Report & Discharge",
-            treatmentPlan: item.quickNotes || "Follow prescribed clinical regimen",
-            prescribedMeds: item.reports,
-            reviewedAt: item.submittedTime,
-            attendingDoctor: item.doctorName || activeDoctorName || "Doctor",
-          }));
+          .map((item: CaseDetails) => {
+            const extra = item as any;
+            return {
+              ...item,
+              category: item.status === "Referred" ? "Referred" : "Complete",
+              doctorDiagnosis: extra.doctorDiagnosis || item.quickNotes || "Physician verified clinical encounter",
+              doctorDecision:
+                extra.doctorDecision ||
+                (item.status === "Referred"
+                  ? `Refer (${item.referalFacility || "Hospital"})`
+                  : "Generate Report & Discharge"),
+              treatmentPlan: extra.treatmentPlan || item.quickNotes || "Follow prescribed clinical regimen",
+              prescribedMeds: extra.prescribedMeds || item.reports,
+              reviewedAt: (() => {
+                const targetTime = item.updatedAt || extra.updated_at || extra.updatedAt;
+                if (targetTime) {
+                  try {
+                    const d = new Date(targetTime);
+                    if (!isNaN(d.getTime())) {
+                      return d.toLocaleString([], {
+                        month: "short",
+                        day: "numeric",
+                        year: "numeric",
+                        hour: "2-digit",
+                        minute: "2-digit",
+                      });
+                    }
+                  } catch {}
+                }
+                if (extra.reviewedAt && !extra.reviewedAt.includes("ago")) {
+                  return extra.reviewedAt;
+                }
+                return "Recently";
+              })(),
+              attendingDoctor: extra.attendingDoctor || item.doctorName || activeDoctorName || "Doctor",
+              dischargeReportUrl: extra.dischargeReportUrl || item.dischargeReportUrl,
+              dischargeReportText: extra.dischargeReportText || item.dischargeReportText,
+            };
+          });
         setReviewedCases(liveReviewed);
         if (typeof window !== "undefined") {
           sessionStorage.setItem("triage_cached_doctor_queue", JSON.stringify(liveDoctorQueue));
@@ -312,7 +339,14 @@ function DoctorPortalContent() {
       doctorDecision: decision,
       doctorNotes: notes,
       prescriptions: prescriptionsText || "",
-      reviewedAt: "Just now",
+      reviewedAt: new Date().toLocaleString([], {
+        month: "short",
+        day: "numeric",
+        year: "numeric",
+        hour: "2-digit",
+        minute: "2-digit",
+      }),
+      updatedAt: new Date().toISOString(),
       attendingDoctor: activeDoctorName,
       doctorId: activeDoctorId || caseItem.doctorId,
       doctorName: activeDoctorName || caseItem.doctorName,
@@ -325,10 +359,15 @@ function DoctorPortalContent() {
     setReviewedCases((prev) => [completedRecord, ...prev]);
 
     // 3. Update backend/database if live with doctor_id
+    const autoNotes =
+      actionStatus === "Complete"
+        ? buildAutoResolveNotes(caseItem, notes)
+        : notes;
+
     submitLiveNurseAction({
       case_number: caseItem.id,
       action_type: decision,
-      review_note: decision.toLowerCase().includes("refer") ? (referralData?.transferReason || "") : notes,
+      review_note: decision.toLowerCase().includes("refer") ? (referralData?.transferReason || "") : autoNotes,
       target_status: actionStatus,
       assigned_doctor_name: activeDoctorName,
       doctor_id: activeDoctorId,
@@ -409,7 +448,10 @@ function DoctorPortalContent() {
 
       {/* TAB 6: MY PROFILE */}
       {activeTab === "profile" && (
-        <DoctorProfileView />
+        <DoctorProfileView
+          queueCases={queueCases}
+          reviewedCases={reviewedCases}
+        />
       )}
     </DoctorShell>
   );

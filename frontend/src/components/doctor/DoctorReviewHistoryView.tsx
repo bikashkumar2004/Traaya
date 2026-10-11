@@ -20,6 +20,8 @@ import {
   DoctorHistoryListView,
   HistoryDisposition,
 } from "./history";
+import { buildAutoResolveNotes } from "@/lib/doctor/doctor-resolve-notes";
+import { openHospitalDischargeReport } from "@/lib/pdf/openDischargeReport";
 
 export interface ReviewedCaseRecord extends CaseDetails {
   category?: string;
@@ -196,7 +198,7 @@ function extractActionDetails(notes?: string) {
   }
 
   // Clean notes from internal tags
-  const cleanNotes = notes
+  let cleanNotes = notes
     .replace(/\[Hospital Checkup Timeline\]:\s*[^\n]+/g, "")
     .replace(/\[Referred Hospital\/Facility\]:\s*[^\n]+/g, "")
     .replace(/\[Inpatient Admission\]:\s*[^\n]+/g, "")
@@ -204,6 +206,12 @@ function extractActionDetails(notes?: string) {
     .replace(/\[Prescription Issued\]:\s*[^\n]+/g, "")
     .replace(/\[Teleconsultation\]:[^\n]+/g, "")
     .trim();
+
+  // If cleanNotes contains the auto-generated resolve_notes text, extract only any doctor specific notes
+  if (cleanNotes.includes("Clinical evaluation revealed stable hemodynamics")) {
+    const docNotesMatch = cleanNotes.match(/Doctor review notes:\s*"([^"]+)"/);
+    cleanNotes = docNotesMatch ? docNotesMatch[1] : "";
+  }
 
   return { cleanNotes, timeline, referral, ward, teleconsult };
 }
@@ -413,10 +421,15 @@ export function DoctorReviewHistoryView({
     setSelectedCaseToReview(updatedCase);
     onUpdateCase?.(updatedCase);
 
+    const autoNotes =
+      finalStatus === "Complete"
+        ? buildAutoResolveNotes(selectedCaseToReview, finalNotes)
+        : finalNotes;
+
     submitLiveNurseAction({
       case_number: selectedCaseToReview.id,
       action_type: finalDecision,
-      review_note: disposition === "Refer to Hospital" ? checkupReferralReason.trim() : finalNotes,
+      review_note: disposition === "Refer to Hospital" ? checkupReferralReason.trim() : autoNotes,
       target_status: finalStatus,
       assigned_doctor_name: activeDoctorName,
       doctor_id: activeDoctorId,
@@ -496,7 +509,7 @@ export function DoctorReviewHistoryView({
           activeModalTab={activeModalTab}
           setActiveModalTab={setActiveModalTab}
           onBack={() => setSelectedCaseToReview(null)}
-          onPrint={(c) => setSelectedCaseToPrint(c)}
+          onPrint={(c) => openHospitalDischargeReport(c)}
           onOpenCheckup={handleOpenCheckup}
           isAwaitingCheckup={isAwaitingCheckup}
           statusConfig={statusConfig}
@@ -564,7 +577,7 @@ export function DoctorReviewHistoryView({
         getCategoryCount={getCategoryCount}
         searchTerm={searchTerm}
         setSearchTerm={setSearchTerm}
-        onSelectCaseToPrint={(c) => setSelectedCaseToPrint(c)}
+        onSelectCaseToPrint={(c) => openHospitalDischargeReport(c)}
         onSelectCaseToReview={(c) => {
           setSelectedCaseToReview(c);
           setActiveModalTab("Overview");

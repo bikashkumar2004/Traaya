@@ -142,7 +142,7 @@ export async function POST(req: NextRequest) {
       status: "Completed",
       discharge_report_url: publicPdfUrl,
       discharge_report_text: JSON.stringify(reportData),
-      resolve_notes: doctorNotes || reportData.clinicalSummary,
+      resolve_notes: reportData.clinicalSummary || doctorNotes,
       updated_at: new Date().toISOString(),
     };
     if (doctorProfileId) {

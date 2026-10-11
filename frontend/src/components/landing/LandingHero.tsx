@@ -36,7 +36,7 @@ export function LandingHero() {
 
           {/* Subtitle */}
           <p className="text-base sm:text-lg text-slate-600 leading-relaxed max-w-2xl font-normal">
-            A human-in-the-loop, non-diagnostic, privacy-first platform that organizes clinical priorities and patient flow at point of care in 12+ Indian languages — empowering ANMs, community hospitals, and primary clinics.
+            A human-in-the-loop, non-diagnostic, privacy-first platform that organizes clinical priorities and patient flow at point of care in 23 Indian languages — empowering ANMs, community hospitals, and primary clinics.
           </p>
 
           {/* CTAs: 2 Distinct Portals (Individual & Organization vs Health Workers) */}

@@ -187,6 +187,17 @@ export const fetchProfileFromSupabase = async (userId: string, authUser?: any): 
           roleRow = dData;
         }
       }
+
+      if (roleRow?.facility_id && !roleRow?.facility_name) {
+        const { data: fData } = await supabase
+          .from("profiles")
+          .select("full_name")
+          .eq("id", roleRow.facility_id)
+          .maybeSingle();
+        if (fData?.full_name) {
+          roleRow.facility_name = fData.full_name;
+        }
+      }
       return mapSupabaseProfile(data, authUser, roleRow);
     }
   } catch (err) {

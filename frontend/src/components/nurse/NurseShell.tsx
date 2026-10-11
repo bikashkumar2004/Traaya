@@ -1,9 +1,10 @@
 "use client";
 
-import React, { useState } from "react";
+import React, { useState, useEffect } from "react";
 import Link from "next/link";
 import { usePathname, useRouter } from "next/navigation";
 import { useAuth } from "@/lib/auth-context";
+import { supabase } from "@/lib/supabase";
 import {
   LayoutDashboard,
   UserPlus,
@@ -49,6 +50,46 @@ export function NurseShell({
   const { user, signOut } = useAuth();
   const [mobileSidebarOpen, setMobileSidebarOpen] = useState(false);
   const [notificationsOpen, setNotificationsOpen] = useState(false);
+
+  const [realFacilityName, setRealFacilityName] = useState<string>(
+    user?.facilityName || ""
+  );
+
+  useEffect(() => {
+    if (user?.facilityName) {
+      setRealFacilityName(user.facilityName);
+      return;
+    }
+    async function loadNurseFacility() {
+      if (!supabase) return;
+      const nurseId = user?.id || user?.userId;
+      if (!nurseId) return;
+      try {
+        let nq = supabase.from("nurse_profiles").select("facility_name, facility_id");
+        const isUuid = /^[0-9a-fA-F-]{36}$/.test(nurseId);
+        if (isUuid) {
+          nq = nq.eq("profile_id", nurseId);
+        } else {
+          const { data: p } = await supabase.from("profiles").select("id").eq("user_id", nurseId).maybeSingle();
+          if (p?.id) nq = nq.eq("profile_id", p.id);
+        }
+        const { data: np } = await nq.maybeSingle();
+        if (np?.facility_name) {
+          setRealFacilityName(np.facility_name);
+        } else if (np?.facility_id) {
+          const { data: fac } = await supabase.from("profiles").select("full_name").eq("id", np.facility_id).maybeSingle();
+          if (fac?.full_name) {
+            setRealFacilityName(fac.full_name);
+          }
+        }
+      } catch (e) {
+        console.warn("Notice loading nurse facility:", e);
+      }
+    }
+    loadNurseFacility();
+  }, [user?.facilityName, user?.id, user?.userId]);
+
+  const displayFacility = realFacilityName || user?.facilityName || "Designated Health Facility";
 
   const navItems: Array<{ id: NurseNavTab; label: string; icon: React.ElementType; href: string }> = [
     { id: "dashboard", label: "Dashboard", icon: LayoutDashboard, href: "/nurse" },
@@ -138,8 +179,8 @@ export function NurseShell({
                 <Building2 className="w-4 h-4" />
               </div>
               <div className="min-w-0 flex-1">
-                <div className="text-xs font-bold text-slate-900 truncate" title={user?.facilityName || "Designated Health Facility"}>
-                  {user?.facilityName || "Designated Health Facility"}
+                <div className="text-xs font-bold text-slate-900 truncate" title={displayFacility}>
+                  {displayFacility}
                 </div>
                 <div className="text-[10px] text-teal-700 font-medium flex items-center gap-1">
                   <span className="w-1.5 h-1.5 rounded-full bg-emerald-500 animate-pulse" />
@@ -167,8 +208,8 @@ export function NurseShell({
 
             {/* Breadcrumb / Station context on left instead of redundant logo */}
             <div className="hidden sm:flex items-center gap-2 text-xs font-semibold text-slate-600">
-              <span className="text-[11px] font-bold text-teal-800 bg-teal-50 px-2 py-0.5 rounded border border-teal-200 max-w-[220px] truncate" title={user?.facilityName || "Designated Health Facility"}>
-                {user?.facilityName || "Designated Health Facility"}
+              <span className="text-[11px] font-bold text-teal-800 bg-teal-50 px-2 py-0.5 rounded border border-teal-200 max-w-[240px] truncate" title={displayFacility}>
+                {displayFacility}
               </span>
               <span className="text-slate-300">&bull;</span>
               <span className="text-slate-500 font-medium">
@@ -275,7 +316,7 @@ export function NurseShell({
                   {user?.fullName || "Nurse Staff"}
                 </div>
                 <div className="text-[10px] text-slate-500 font-medium">
-                  {user?.userId ? `ID: ${user.userId}` : "Nurse"} &bull; {user?.facilityName || "CHC Khandapada"}
+                  {user?.userId ? `ID: ${user.userId}` : "Nurse"} &bull; {displayFacility}
                 </div>
               </div>
             </button>

@@ -14,7 +14,7 @@ export const LoginBrandPanel: React.FC<LoginBrandPanelProps> = () => {
         <img
           src="/Doctor nurse patient portrait.png"
           alt="TRAAYA Clinical Triage Care Team"
-          className="max-h-full max-w-full object-contain select-none pointer-events-none drop-shadow-xs"
+          className="max-h-full max-w-full object-contain select-none pointer-events-none drop-shadow-xs animate-float will-change-transform"
         />
       </div>
     </div>

@@ -10,6 +10,8 @@ import {
   Video,
   Building2,
   Languages,
+  Activity,
+  FileText
 } from "lucide-react";
 import { CaseDetails } from "@/components/nurse/CaseReviewWorkspace";
 
@@ -175,8 +177,8 @@ export function DoctorQueueListView({
             key={item.id}
             className="bg-white rounded-2xl border border-slate-200 p-5 shadow-xs hover:border-teal-300 hover:shadow-md transition-all flex flex-col md:flex-row md:items-center justify-between gap-4"
           >
-            {/* Left Info: Case #, urgency, status, patient meta, chief complaint */}
-            <div className="space-y-1.5 min-w-0">
+            {/* Left Info: Case ID, Priority badge, Forwarded, Slot, Submitted Time, Patient ID, Name, Highlighted Symptoms */}
+            <div className="space-y-2.5 min-w-0 flex-1">
               <div className="flex items-center gap-2.5 flex-wrap">
                 <span className="text-base font-extrabold text-slate-900 tracking-tight">
                   Case {item.id}
@@ -188,10 +190,14 @@ export function DoctorQueueListView({
                 >
                   {formatUrgencyLabel(item.urgency, item.aiSuggestion?.priority).label}
                 </span>
-                <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-md text-[10px] font-bold bg-purple-50 text-purple-800 border border-purple-200">
+
+                {/* Forwarded by Nurse Staff */}
+                <span className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full text-[10px] font-bold bg-purple-50 text-purple-800 border border-purple-200">
                   <UserCheck className="w-3 h-3 text-purple-600" />
                   <span>{formatReviewStatus(item.status, item.nurseName, item.scheduleTime)}</span>
                 </span>
+
+                {/* Scheduled Slot */}
                 {item.scheduleTime && (
                   <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-md text-[10px] font-bold bg-teal-50 text-teal-800 border border-teal-200">
                     <Clock className="w-3 h-3 text-teal-600" />
@@ -207,61 +213,83 @@ export function DoctorQueueListView({
                     </span>
                   </span>
                 )}
-                {/* Consultation Mode Badge */}
-                <span className={`inline-flex items-center gap-1 px-2 py-0.5 rounded-md text-[10px] font-bold border ${
-                  item.consultationMode === "online"
-                    ? "bg-indigo-50 text-indigo-800 border-indigo-200"
-                    : "bg-blue-50 text-blue-800 border-blue-200"
-                }`}>
-                  {item.consultationMode === "online" ? (
-                    <Video className="w-3 h-3 text-indigo-600" />
-                  ) : (
-                    <Building2 className="w-3 h-3 text-blue-600" />
-                  )}
-                  <span>{item.consultationMode === "online" ? "Online Teleconsult" : "In-Person Walk-in"}</span>
-                </span>
-                {/* Preferred Language Badge */}
-                <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-md text-[10px] font-bold bg-teal-50 text-teal-800 border border-teal-200/80">
-                  <Languages className="w-3 h-3 text-teal-600" />
-                  <span>{item.language || "Odia"}</span>
+
+                {/* Submission Time */}
+                <span className="inline-flex items-center gap-1 text-[11px] text-slate-500 font-medium">
+                  <Clock className="w-3 h-3 text-slate-400" />
+                  <span>Submitted {item.submittedTime}</span>
                 </span>
               </div>
 
+              {/* Patient Identity row: Patient ID and Name */}
               <div className="text-xs text-slate-600 flex items-center gap-2 flex-wrap">
                 <span className="font-semibold text-slate-800">
-                  Patient ID: {item.patientId}
+                  Patient ID: <span className="font-mono text-slate-900 font-bold">{item.patientId}</span>
                 </span>
-                <span>&bull;</span>
-                <span className="font-medium text-slate-700">
-                  Name: {item.name}
-                </span>
-                <span>&bull;</span>
-                <span className="text-slate-500">
-                  {item.age} yrs &bull; {item.gender}
-                </span>
-                <span>&bull;</span>
-                <span className="text-slate-500">
-                  {item.location}
-                </span>
+                {item.name && (
+                  <>
+                    <span className="text-slate-300">&bull;</span>
+                    <span className="font-medium text-slate-700">
+                      Name: <span className="font-semibold text-slate-900">{item.name}</span>
+                    </span>
+                  </>
+                )}
               </div>
 
-              <p className="text-xs text-slate-600 line-clamp-1 italic max-w-2xl pt-0.5">
-                &ldquo;{item.chiefComplaint}&rdquo;
-              </p>
+              {/* HIGHLIGHTED SYMPTOMS & CLINICAL PRESENTATION */}
+              <div className="pt-1 flex flex-wrap items-center gap-2">
+                {(() => {
+                  const rawList =
+                    (item.symptomsData?.symptoms && item.symptomsData.symptoms.length > 0)
+                      ? item.symptomsData.symptoms
+                      : (item.aiInfo?.symptoms && item.aiInfo.symptoms.length > 0)
+                      ? item.aiInfo.symptoms
+                      : [];
 
-              <p className="text-xs text-slate-500">
-                Submitted: {item.submittedTime}
-              </p>
+                  const symptomsList = rawList.length > 0 ? rawList : [item.chiefComplaint || "General Symptoms"];
+
+                  return (
+                    <>
+                      <div className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-teal-50/80 border border-teal-200/90 text-teal-900 shadow-2xs">
+                        <Activity className="w-3.5 h-3.5 text-teal-600 shrink-0" />
+                        <span className="text-[10px] font-bold uppercase tracking-wider text-teal-700">
+                          SYMPTOMS:
+                        </span>
+                        <span className="text-xs font-black text-slate-900">
+                          {symptomsList[0]}
+                        </span>
+                      </div>
+
+                      {symptomsList.slice(1, 4).map((s, idx) => (
+                        <span
+                          key={idx}
+                          className="px-2.5 py-1 rounded-lg text-xs font-semibold bg-slate-100 text-slate-700 border border-slate-200/80"
+                        >
+                          +{s}
+                        </span>
+                      ))}
+                    </>
+                  );
+                })()}
+
+                {/* Medical Report Attached Badge */}
+                {((item.reports && item.reports.length > 0) || item.uploadedReportUrl) && (
+                  <span className="inline-flex items-center gap-1 px-2.5 py-1 rounded-lg text-[11px] font-semibold bg-blue-50 text-blue-800 border border-blue-200">
+                    <FileText className="w-3 h-3 text-blue-600" />
+                    <span>Report Attached</span>
+                  </span>
+                )}
+              </div>
             </div>
 
-            {/* Right Action: Review Button with ArrowRight */}
-            <div className="flex items-center gap-3 shrink-0">
+            {/* Right Action: Review Case Button with ArrowRight */}
+            <div className="flex items-center gap-3 shrink-0 self-end md:self-center">
               <button
                 type="button"
                 onClick={() => onSelectCase(item)}
-                className="px-5 py-2.5 bg-slate-900 hover:bg-teal-800 text-white font-bold text-xs rounded-xl shadow-xs flex items-center gap-1.5 transition-all cursor-pointer group"
+                className="px-5 py-2.5 bg-slate-900 hover:bg-teal-700 text-white font-bold text-xs rounded-xl shadow-xs hover:shadow-md flex items-center gap-2 transition-all cursor-pointer group"
               >
-                <span>Review</span>
+                <span>Review Case</span>
                 <ArrowRight className="w-3.5 h-3.5 group-hover:translate-x-0.5 transition-transform" />
               </button>
             </div>

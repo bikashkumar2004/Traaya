@@ -105,6 +105,11 @@ export interface CaseDetails {
   newPatientId?: string;
   uploadedReportUrl?: string;
   uploadedReportData?: any;
+  dischargeReportUrl?: string;
+  dischargeReportText?: string;
+  reviewedAt?: string;
+  updatedAt?: string;
+  createdAt?: string;
 }
 
 export const FACILITY_OPTIONS = [

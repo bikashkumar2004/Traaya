@@ -52,7 +52,7 @@ export function DoctorDischargeModal({
               </span>
             </div>
             <h2 className="text-xl sm:text-2xl font-black text-slate-900 tracking-tight">
-              Clinical Discharge Summary Verification
+              Clinical Discharge Report Verification
             </h2>
             <p className="text-xs text-slate-500">
               Review and verify all clinical findings, treatments, and prescriptions prior to authorizing patient discharge.
@@ -87,7 +87,7 @@ export function DoctorDischargeModal({
           {/* 1. Document Format & Metadata Header */}
           <div className="p-4 bg-slate-50 rounded-2xl border border-slate-200 space-y-3">
             <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 border-b border-slate-200 pb-2">
-              <span className="font-extrabold text-sm text-slate-900">Hospital Discharge Summary Format</span>
+              <span className="font-extrabold text-sm text-slate-900">Hospital Discharge Report Format</span>
               <span className="text-[11px] text-teal-800 font-semibold">Standard NABH / Odisha Health Template</span>
             </div>
             <div className="grid grid-cols-2 sm:grid-cols-4 gap-2 text-[11px]">
@@ -113,15 +113,16 @@ export function DoctorDischargeModal({
             </p>
           </div>
 
-          {/* 2. Hospital Identification */}
+          {/* 2. Facility Identification */}
           <div className="p-4 bg-teal-50/60 rounded-2xl border border-teal-200 flex flex-col sm:flex-row sm:items-center justify-between gap-3">
             <div>
-              <div className="text-base font-black text-teal-950">{dischargeReportData.hospitalName}</div>
+              <span className="text-[10px] font-bold text-teal-800 uppercase tracking-wide block">Designated Health Facility</span>
+              <div className="text-base font-black text-teal-950">{dischargeReportData.facilityName || dischargeReportData.hospitalName}</div>
               <div className="text-[11px] text-teal-900">{dischargeReportData.hospitalAddress}</div>
               <div className="text-[11px] text-teal-800 font-medium">{dischargeReportData.contactInfo}</div>
             </div>
             <div className="px-3 py-1 bg-white text-teal-900 border border-teal-300 rounded-xl text-[11px] font-bold shrink-0 self-start sm:self-center">
-              Official Encounter Summary
+              Official Encounter Report
             </div>
           </div>
 
@@ -385,16 +386,16 @@ export function DoctorDischargeModal({
               <span className="text-[10px] text-slate-500 font-normal">Section 6</span>
             </div>
 
-            <div className="overflow-x-auto">
-              <table className="w-full text-left text-xs border-collapse">
+            <div className="overflow-x-auto rounded-xl border border-slate-200">
+              <table className="w-full min-w-[560px] text-left text-xs border-collapse">
                 <thead>
                   <tr className="border-b border-slate-200 text-slate-500 font-bold text-[10px] uppercase bg-slate-50">
-                    <th className="p-2 w-8">#</th>
-                    <th className="p-2">Medication Name</th>
-                    <th className="p-2">Dosage</th>
-                    <th className="p-2">Frequency</th>
-                    <th className="p-2">Duration</th>
-                    {isEditingDischarge && <th className="p-2 w-10 text-center">Action</th>}
+                    <th className="p-2.5 w-10 text-center">#</th>
+                    <th className="p-2.5 w-[34%]">Medication Name</th>
+                    <th className="p-2.5 w-[20%]">Dosage</th>
+                    <th className="p-2.5 w-[26%]">Frequency</th>
+                    <th className="p-2.5 w-[16%]">Duration</th>
+                    {isEditingDischarge && <th className="p-2.5 w-12 text-center">Action</th>}
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-slate-100">

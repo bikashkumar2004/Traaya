@@ -18,6 +18,7 @@ import {
   Step4DocumentsClinical,
   Step5IntakeConfirmation,
 } from "./intake";
+import { useAuth } from "@/lib/auth-context";
 
 interface PatientIntakeProps {
   onCaseCreated: (newCase: any) => Promise<void> | void;
@@ -25,6 +26,7 @@ interface PatientIntakeProps {
 }
 
 export function PatientIntakeWorkflow({ onCaseCreated, onCancel }: PatientIntakeProps) {
+  const { user } = useAuth();
   const [currentStep, setCurrentStep] = useState<number>(1);
 
   // Step 1: Patient type & live search
@@ -179,7 +181,7 @@ export function PatientIntakeWorkflow({ onCaseCreated, onCancel }: PatientIntake
         priority: severity === "Severe" ? "Red (Priority 1)" : "Yellow (Priority 2)",
         reason: `${severity} symptom onset reported. Triage review scheduled.`,
       },
-      facility: "CHC Khandapada",
+      facility: user?.facilityName || "Designated Health Facility",
       facilityLocation: "Nayagarh, Odisha",
       consultationMode: "offline",
     };

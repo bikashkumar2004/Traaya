@@ -114,3 +114,17 @@ select:focus {
   box-shadow: 0 0 0 2px rgba(15, 118, 110, 0.15);
   outline: none;
 }
+
+/* Gentle floating illustration animation */
+@keyframes floatSlow {
+  0%, 100% {
+    transform: translateY(0px);
+  }
+  50% {
+    transform: translateY(-9px);
+  }
+}
+
+.animate-float {
+  animation: floatSlow 4s ease-in-out infinite;
+}

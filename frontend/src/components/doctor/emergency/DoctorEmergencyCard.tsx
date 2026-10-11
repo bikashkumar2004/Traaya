@@ -220,7 +220,7 @@ export function DoctorEmergencyCard({
                 Assigned CHC Facility:
               </span>
               <span className="text-teal-900 font-extrabold text-xs">
-                {c.facility || "CHC Khandapada Emergency"} &bull; {c.facilityLocation || "Nayagarh, Odisha"}
+                {c.facility || "Primary Health Facility"} &bull; {c.facilityLocation || "Designated Location"}
               </span>
             </div>
             {c.reports && c.reports.length > 0 && (

@@ -80,9 +80,6 @@ export function DoctorDecisionDeck({
         <h3 className="text-sm font-bold text-slate-800">
           Clinical Decision &amp; Disposition
         </h3>
-        <span className="text-[11px] text-teal-800 font-semibold bg-teal-50 px-2 py-0.5 rounded-md border border-teal-200">
-          Doctor Authorization
-        </span>
       </div>
 
       <div className="space-y-4">
@@ -188,7 +185,7 @@ export function DoctorDecisionDeck({
                   ) : (
                     <>
                       <Sparkles className="w-4 h-4 text-emerald-200 group-hover:rotate-12 transition-transform" />
-                      <span>⚡ Generate AI Clinical Discharge Report</span>
+                      <span>Generate Clinical Discharge Report</span>
                     </>
                   )}
                 </button>

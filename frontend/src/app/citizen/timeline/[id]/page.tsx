@@ -1566,7 +1566,14 @@ export default function PatientTicketDetailPage() {
                 Doctor Consultation Notes
               </span>
               <p className="p-3 rounded-xl bg-slate-50 border border-slate-100 font-semibold text-slate-800">
-                {valOrDash(ticket.resolve_notes || ticket.doctor_notes)}
+                {(() => {
+                  const raw = ticket.doctor_notes || ticket.resolve_notes || "";
+                  if (raw.includes("stable hemodynamics")) {
+                    const match = raw.match(/Doctor review notes:\s*"([^"]+)"/);
+                    return match ? match[1] : "Triage verified and cleared for clinical follow-up.";
+                  }
+                  return valOrDash(raw);
+                })()}
               </p>
             </div>
           </div>

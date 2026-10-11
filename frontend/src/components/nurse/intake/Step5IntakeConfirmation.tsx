@@ -70,7 +70,7 @@ export function Step5IntakeConfirmation({
         </div>
         <div className="flex justify-between">
           <span className="text-slate-500 font-medium">Assigned Facility:</span>
-          <span className="font-bold text-slate-900">CHC Khandapada</span>
+          <span className="font-bold text-slate-900">{createdCaseData.facility || "Designated Health Facility"}</span>
         </div>
       </div>
 

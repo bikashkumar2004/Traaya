@@ -3,6 +3,7 @@
 import React from "react";
 import { Printer } from "lucide-react";
 import { ReviewedCaseRecord } from "../DoctorReviewHistoryView";
+import { openHospitalDischargeReport } from "@/lib/pdf/openDischargeReport";
 
 interface DoctorPrintSlipModalProps {
   caseToPrint: ReviewedCaseRecord | null;
@@ -55,7 +56,7 @@ export function DoctorPrintSlipModal({ caseToPrint, onClose }: DoctorPrintSlipMo
         </div>
 
         <div className="flex items-center justify-between text-xs text-slate-500">
-          <span>Attending MO: <strong>Dr. Kavita Verma, MD</strong></span>
+          <span>Attending Doctor: <strong>Dr. Kavita Verma, MD</strong></span>
           <span>Reg: <strong>MCI-2012-09412</strong></span>
         </div>
 
@@ -70,12 +71,13 @@ export function DoctorPrintSlipModal({ caseToPrint, onClose }: DoctorPrintSlipMo
           <button
             type="button"
             onClick={() => {
-              window.print();
+              openHospitalDischargeReport(caseToPrint);
+              onClose();
             }}
             className="px-4 py-2 bg-teal-700 hover:bg-teal-800 text-white text-xs font-bold rounded-xl shadow-xs flex items-center gap-1.5 cursor-pointer"
           >
             <Printer className="w-3.5 h-3.5" />
-            <span>Print Document</span>
+            <span>Open Discharge Report</span>
           </button>
         </div>
       </div>

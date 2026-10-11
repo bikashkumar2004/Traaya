@@ -12,8 +12,6 @@ import {
   FileText,
   UserCheck,
   Video,
-  Building2,
-  Languages,
   AlertTriangle,
   X,
 } from "lucide-react";
@@ -339,7 +337,12 @@ export function DoctorReviewQueueView({
           symptoms: selectedCase.aiInfo?.symptoms || [],
           vitals: (selectedCase as any).vitals || {},
           doctorNotes: reviewNote,
-          doctorName: "Dr. Kavita Verma, MD",
+          doctorName: user?.fullName || "Dr. Kavita Verma, MD",
+          facilityName: selectedCase.facility || user?.facilityName || "Jan Aushadhi Kendra",
+          facilityAddress: "Hospital Road, Main CHC Campus, Khandapada, Nayagarh, Odisha - 752077",
+          facilityContact: (selectedCase.facility || user?.facilityName) === "Jan Aushadhi"
+            ? "Ph: +91 9437107462 | E-mail: facility.khandapada.7462@triageassist.org"
+            : "Ph: +91 9437106689 | E-mail: facility.khandapada.6689@triageassist.org",
         }),
       });
 
@@ -525,6 +528,34 @@ export function DoctorReviewQueueView({
   // VIEW 1: CASE REVIEW WORKSPACE
   // -------------------------------------------------------------
   if (selectedCase) {
+    const normUrgency = (selectedCase.urgency || "").toLowerCase();
+    const isRed = normUrgency.includes("red") || normUrgency.includes("immed") || normUrgency.includes("emerg") || normUrgency.includes("critical");
+    const isAmber = normUrgency.includes("amber") || normUrgency.includes("yellow") || (normUrgency.includes("urg") && !normUrgency.includes("less urg")) || normUrgency.includes("med");
+
+    const priorityBadge = isRed
+      ? {
+          label: "Red",
+          subtext: "Immediate / High",
+          bg: "bg-rose-50 border-rose-300 text-rose-900",
+          dot: "bg-rose-500 ring-rose-300",
+          tag: "text-rose-700",
+        }
+      : isAmber
+      ? {
+          label: selectedCase.urgency === "Amber" ? "Amber" : (selectedCase.urgency || "Amber / Yellow"),
+          subtext: "Urgent / Medium",
+          bg: "bg-amber-50 border-amber-300 text-amber-900",
+          dot: "bg-amber-500 ring-amber-300",
+          tag: "text-amber-700",
+        }
+      : {
+          label: "Green",
+          subtext: "Routine / Low",
+          bg: "bg-emerald-50 border-emerald-300 text-emerald-900",
+          dot: "bg-emerald-500 ring-emerald-300",
+          tag: "text-emerald-700",
+        };
+
     return (
       <div className="space-y-5">
         {/* Toast Notification */}
@@ -554,32 +585,9 @@ export function DoctorReviewQueueView({
                 <h1 className="text-2xl sm:text-3xl font-black text-slate-900 tracking-tight">
                   Case {selectedCase.id}
                 </h1>
-                <span
-                  className={`px-2.5 py-0.5 rounded-full text-xs font-bold border ${
-                    formatUrgencyLabel(selectedCase.urgency, selectedCase.aiSuggestion?.priority).badgeClass
-                  }`}
-                >
-                  {formatUrgencyLabel(selectedCase.urgency, selectedCase.aiSuggestion?.priority).label}
-                </span>
                 <span className="px-2.5 py-0.5 rounded-full text-xs font-bold bg-purple-50 text-purple-800 border border-purple-200 inline-flex items-center gap-1.5">
                   <UserCheck className="w-3.5 h-3.5 text-purple-600" />
                   <span>{formatReviewStatus(selectedCase.status, selectedCase.nurseName, selectedCase.scheduleTime)}</span>
-                </span>
-                <span className={`px-2.5 py-0.5 rounded-full text-xs font-bold border inline-flex items-center gap-1.5 ${
-                  selectedCase.consultationMode === "online"
-                    ? "bg-indigo-50 text-indigo-800 border-indigo-200"
-                    : "bg-blue-50 text-blue-800 border-blue-200"
-                }`}>
-                  {selectedCase.consultationMode === "online" ? (
-                    <Video className="w-3.5 h-3.5 text-indigo-600" />
-                  ) : (
-                    <Building2 className="w-3.5 h-3.5 text-blue-600" />
-                  )}
-                  <span>Mode: {selectedCase.consultationMode === "online" ? "Online Teleconsult" : "In-Person Walk-in"}</span>
-                </span>
-                <span className="px-2.5 py-0.5 rounded-full text-xs font-bold bg-teal-50 text-teal-800 border border-teal-200/80 inline-flex items-center gap-1.5">
-                  <Languages className="w-3.5 h-3.5 text-teal-600" />
-                  <span>Language: {selectedCase.language || "Odia"}</span>
                 </span>
               </div>
 
@@ -587,21 +595,38 @@ export function DoctorReviewQueueView({
                 <strong className="text-slate-900 font-bold">
                   Patient ID: {selectedCase.patientId}
                 </strong>
-                <span>&bull;</span>
-                <span>Name: <strong className="text-slate-900 font-bold">{selectedCase.name}</strong></span>
-                <span>&bull;</span>
-                <span>Age/Sex: <strong className="text-slate-800">{selectedCase.age} yrs / {selectedCase.gender}</strong></span>
-                <span>&bull;</span>
-                <span>Location: {selectedCase.location}</span>
               </div>
             </div>
 
-            <div className="text-left lg:text-right text-xs text-slate-500 shrink-0">
-              <div className="font-semibold text-slate-700">
-                Forwarded: {selectedCase.submittedTime}
+            <div className="flex flex-wrap items-center gap-3.5 self-start lg:self-center shrink-0">
+              {/* Highlighted Triage Priority Badge */}
+              <div
+                className={`px-3.5 py-1.5 rounded-xl border flex items-center gap-2.5 shadow-2xs ${priorityBadge.bg}`}
+              >
+                <span className={`w-2.5 h-2.5 rounded-full ${priorityBadge.dot} ring-2 animate-pulse shrink-0`} />
+                <div className="flex flex-col text-left">
+                  <span className="text-[10px] font-bold uppercase tracking-wider text-slate-500 leading-none">
+                    Triage Priority
+                  </span>
+                  <div className="flex items-center gap-1.5 mt-0.5">
+                    <span className="text-xs font-black tracking-tight">
+                      {selectedCase.urgency || priorityBadge.label}
+                    </span>
+                    <span className={`text-[10px] font-bold ${priorityBadge.tag}`}>
+                      ({priorityBadge.subtext})
+                    </span>
+                  </div>
+                </div>
               </div>
-              <div className="text-[11px] text-slate-400 mt-0.5">
-                Via CHC Nurse Station &bull; Verified by {selectedCase.nurseName || "Nurse Priya S."}
+
+              {/* Submitted / Forwarded Metadata */}
+              <div className="text-left lg:text-right text-xs text-slate-500 shrink-0">
+                <div className="font-semibold text-slate-700">
+                  Forwarded: {selectedCase.submittedTime}
+                </div>
+                <div className="text-[11px] text-slate-400 mt-0.5">
+                  Via CHC Nurse Station &bull; Verified by {selectedCase.nurseName || "Nurse Priya S."}
+                </div>
               </div>
             </div>
           </div>

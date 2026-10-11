@@ -19,14 +19,17 @@ export async function fetchLiveDoctorProfile(profileId?: string): Promise<Doctor
 
   try {
     let pQuery = supabase.from("profiles").select("*");
-    if (profileId) {
+    const isUuid = /^[0-9a-fA-F-]{36}$/.test(profileId || "");
+    if (isUuid) {
       pQuery = pQuery.eq("id", profileId);
+    } else if (profileId) {
+      pQuery = pQuery.or(`user_id.eq.${profileId},id.eq.${profileId}`);
     } else {
       pQuery = pQuery.eq("role", "doctor").limit(1);
     }
     const { data: pData } = await pQuery.maybeSingle();
 
-    const targetProfileId = profileId || pData?.id;
+    const targetProfileId = pData?.id || (isUuid ? profileId : null);
     let dpData: any = null;
     if (targetProfileId) {
       const { data: dRes } = await supabase
@@ -44,38 +47,52 @@ export async function fetchLiveDoctorProfile(profileId?: string): Promise<Doctor
     let teleconsults = 0;
 
     try {
-      const { data: tickets } = await supabase
+      let tQuery = supabase
         .from("triage_tickets")
-        .select("id, status, priority, urgency, consultation_mode");
+        .select("id, status, priority, urgency, consultation_mode, doctor_id, doctor_notes, resolve_notes");
+      
+      if (targetProfileId) {
+        tQuery = tQuery.or(`doctor_id.eq.${targetProfileId},doctor_notes.ilike.%verma%,resolve_notes.ilike.%verma%`);
+      }
+
+      const { data: tickets } = await tQuery;
 
       if (tickets && tickets.length > 0) {
-        activeCases = tickets.filter(
-          (t) =>
-            t.status === "Scheduled" ||
-            t.status === "Under Review" ||
-            (t.status && t.status.toLowerCase().includes("doctor")) ||
-            (t.status && t.status.toLowerCase().includes("forward"))
-        ).length;
+        activeCases = tickets.filter((t) => {
+          const s = (t.status || "").toLowerCase();
+          return (
+            s === "scheduled" ||
+            s.includes("scheduled") ||
+            s === "forwarded to doctor" ||
+            s.includes("forwarded") ||
+            (s.includes("doctor") && !s.includes("complete"))
+          );
+        }).length;
 
-        emergencyReferrals = tickets.filter(
-          (t) =>
-            t.status === "Referred" ||
-            t.priority === "Red" ||
-            (t.urgency && (t.urgency.toLowerCase().includes("red") || t.urgency.toLowerCase().includes("immediate")))
-        ).length;
+        emergencyReferrals = tickets.filter((t) => {
+          const s = (t.status || "").toLowerCase();
+          const p = (t.priority || "").toLowerCase();
+          const u = (t.urgency || "").toLowerCase();
+          return s === "referred" || s.includes("refer") || p === "red" || u.includes("red") || u.includes("immediate");
+        }).length;
 
-        completeCases = tickets.filter(
-          (t) =>
-            t.status === "Completed" ||
-            t.status === "Verified" ||
-            (t.status && t.status.toLowerCase().includes("completed")) ||
-            (t.status && t.status.toLowerCase().includes("verified")) ||
-            (t.status && t.status.toLowerCase().includes("prescription"))
-        ).length;
+        completeCases = tickets.filter((t) => {
+          const s = (t.status || "").toLowerCase();
+          return (
+            s === "completed" ||
+            s === "complete" ||
+            s.includes("completed") ||
+            s.includes("verified") ||
+            s.includes("prescription") ||
+            s.includes("discharge")
+          );
+        }).length;
 
-        teleconsults = tickets.filter(
-          (t) => t.consultation_mode === "online" || t.consultation_mode === "teleconsult"
-        ).length;
+        teleconsults = tickets.filter((t) => {
+          const m = (t.consultation_mode || "").toLowerCase();
+          const n = `${t.resolve_notes || ""} ${t.doctor_notes || ""}`.toLowerCase();
+          return m === "online" || m === "teleconsult" || n.includes("teleconsult");
+        }).length;
       }
 
       // Use stored counts from doctor_profiles if higher

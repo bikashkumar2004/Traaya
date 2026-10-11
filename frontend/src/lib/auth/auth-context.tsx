@@ -205,6 +205,7 @@ export function AuthProvider({ children, initialUser }: { children: React.ReactN
               role: profile.role,
               phone: profile.phone,
               patientUhid: profile.patientUhid,
+              facilityName: profile.facilityName,
             });
           }
         } else if (event === "SIGNED_OUT") {

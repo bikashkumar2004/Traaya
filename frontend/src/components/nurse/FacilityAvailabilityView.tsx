@@ -21,6 +21,7 @@ import {
   updateLiveStaffStatus,
   fetchLiveFacilityStatus,
 } from "@/lib/nurse-api";
+import { useAuth } from "@/lib/auth-context";
 
 export type WorkerStatus = "Available" | "Busy" | "Offline" | "On Standby";
 
@@ -102,6 +103,7 @@ const DEFAULT_WORKERS: PHCWorker[] = [
 ];
 
 export function FacilityAvailabilityView() {
+  const { user } = useAuth();
   const [filterStatus, setFilterStatus] = useState<string>("All");
   const [searchWorker, setSearchWorker] = useState<string>("");
   const [workers, setWorkers] = useState<PHCWorker[]>(DEFAULT_WORKERS);
@@ -223,7 +225,7 @@ export function FacilityAvailabilityView() {
       <div className="flex flex-col md:flex-row md:items-center justify-between gap-4">
         <div>
           <h1 className="text-2xl sm:text-3xl font-black text-slate-900 tracking-tight">
-            CHC Khandapada Staff Availability
+            {user?.facilityName ? `${user.facilityName} Staff Availability` : "Health Facility Staff Availability"}
           </h1>
           <p className="text-xs sm:text-sm text-slate-600 mt-1 max-w-2xl leading-relaxed">
             Real-time duty status of doctors, clinical reviewers, nurses, and laboratory personnel at this PHC.

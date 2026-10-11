@@ -454,7 +454,7 @@ function LoginForm() {
                       ? "Sign in to Organization Portal"
                       : selectedRole === "healthcamp"
                       ? "Sign in to Health Camp Portal"
-                      : "Sign in to Patient Portal"
+                      : "Sign in to Citizen Portal"
                   ) : (
                     "Sign in to Health Workers Portal"
                   )

@@ -1,9 +1,10 @@
 "use client";
 
-import React, { useState } from "react";
+import React, { useState, useEffect } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useAuth } from "@/lib/auth-context";
+import { supabase } from "@/lib/supabase";
 import {
   LayoutDashboard,
   ClipboardCheck,
@@ -57,6 +58,46 @@ export function DoctorShell({
   const [mobileSidebarOpen, setMobileSidebarOpen] = useState(false);
   const [notificationsOpen, setNotificationsOpen] = useState(false);
 
+  const [realFacilityName, setRealFacilityName] = useState<string>(
+    user?.facilityName || ""
+  );
+
+  useEffect(() => {
+    if (user?.facilityName) {
+      setRealFacilityName(user.facilityName);
+      return;
+    }
+    async function loadDoctorFacility() {
+      if (!supabase) return;
+      const docId = user?.id || user?.userId;
+      if (!docId) return;
+      try {
+        let dq = supabase.from("doctor_profiles").select("facility_name, facility_id");
+        const isUuid = /^[0-9a-fA-F-]{36}$/.test(docId);
+        if (isUuid) {
+          dq = dq.eq("profile_id", docId);
+        } else {
+          const { data: p } = await supabase.from("profiles").select("id").eq("user_id", docId).maybeSingle();
+          if (p?.id) dq = dq.eq("profile_id", p.id);
+        }
+        const { data: dp } = await dq.maybeSingle();
+        if (dp?.facility_name) {
+          setRealFacilityName(dp.facility_name);
+        } else if (dp?.facility_id) {
+          const { data: fac } = await supabase.from("profiles").select("full_name").eq("id", dp.facility_id).maybeSingle();
+          if (fac?.full_name) {
+            setRealFacilityName(fac.full_name);
+          }
+        }
+      } catch (e) {
+        console.warn("Notice loading doctor facility:", e);
+      }
+    }
+    loadDoctorFacility();
+  }, [user?.facilityName, user?.id, user?.userId]);
+
+  const displayFacility = realFacilityName || user?.facilityName || "Designated Health Facility";
+
   const navItems: Array<{
     id: DoctorNavTab;
     label: string;
@@ -74,8 +115,6 @@ export function DoctorShell({
       id: "queue", 
       label: "Review Queue", 
       icon: ClipboardCheck,
-      badge: queueCount > 0 ? queueCount : undefined,
-      badgeClass: "bg-teal-100 text-teal-800"
     },
     { 
       id: "emergency", 
@@ -89,8 +128,6 @@ export function DoctorShell({
       id: "history", 
       label: "Review History", 
       icon: History,
-      badge: historyCount > 0 ? historyCount : undefined,
-      badgeClass: "bg-blue-100 text-blue-800"
     },
     { 
       id: "facility", 
@@ -203,8 +240,8 @@ export function DoctorShell({
                 <Building2 className="w-4 h-4" />
               </div>
               <div className="min-w-0 flex-1">
-                <div className="text-xs font-bold text-slate-900 truncate">
-                  CHC Khandapada
+                <div className="text-xs font-bold text-slate-900 truncate" title={displayFacility}>
+                  {displayFacility}
                 </div>
                 <div className="text-[10px] text-teal-700 font-medium flex items-center gap-1">
                   <span className="w-1.5 h-1.5 rounded-full bg-emerald-500 animate-pulse" />
@@ -232,8 +269,8 @@ export function DoctorShell({
 
             {/* Hospital Context Breadcrumb / Station Badge */}
             <div className="hidden sm:flex items-center gap-2 text-xs font-semibold text-slate-600">
-              <span className="text-[11px] font-bold text-teal-800 bg-teal-50 px-2 py-0.5 rounded border border-teal-200">
-                CHC Khandapada
+              <span className="text-[11px] font-bold text-teal-800 bg-teal-50 px-2 py-0.5 rounded border border-teal-200 max-w-[240px] truncate" title={displayFacility}>
+                {displayFacility}
               </span>
               <span className="text-slate-300">&bull;</span>
               <span className="text-slate-500 font-medium">
@@ -353,7 +390,7 @@ export function DoctorShell({
                   {user?.fullName || "Doctor"}
                 </div>
                 <div className="text-[10px] text-slate-500 font-medium">
-                  {user?.userId ? `ID: ${user.userId}` : "Doctor"} &bull; {user?.facilityName || "CHC Khandapada"}
+                  {user?.userId ? `ID: ${user.userId}` : "Doctor"} &bull; {displayFacility}
                 </div>
               </div>
             </button>

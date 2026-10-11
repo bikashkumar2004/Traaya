@@ -136,7 +136,7 @@ export function mapDbTicketToCase(t: any, linkedReports: any[] = []): CaseDetail
     location: patientLocation,
     language: t.preferred_language || "Odia",
     consent: t.consent_status || "Given",
-    quickNotes: t.resolve_notes || t.doctor_notes || (typeof t.uploaded_report_data === "object" ? (t.uploaded_report_data?.summary || "") : "") || t.report_text || "",
+    quickNotes: (t.symptoms_data as any)?.nurse_notes || (t.symptoms_data as any)?.intake_notes || t.intake_notes || "",
     submittedTime,
     urgency: priorityVal,
     urgencyClass: priorityClass,
@@ -213,6 +213,27 @@ export function mapDbTicketToCase(t: any, linkedReports: any[] = []): CaseDetail
     facilityReferralAcceptedAt: t.facility_referral_accepted_at || undefined,
     referralNotes: t.referral_notes || undefined,
     newPatientId: t.new_patient_id || undefined,
+    updatedAt: t.updated_at || undefined,
+    createdAt: t.created_at || undefined,
+    dischargeReportUrl: t.discharge_report_url || undefined,
+    dischargeReportText: t.discharge_report_text || undefined,
+    reviewedAt: (() => {
+      const targetTime = t.updated_at;
+      if (!targetTime) return "Recently";
+      try {
+        const d = new Date(targetTime);
+        if (!isNaN(d.getTime())) {
+          return d.toLocaleString([], {
+            month: "short",
+            day: "numeric",
+            year: "numeric",
+            hour: "2-digit",
+            minute: "2-digit",
+          });
+        }
+      } catch {}
+      return "Recently";
+    })(),
   };
 }
 

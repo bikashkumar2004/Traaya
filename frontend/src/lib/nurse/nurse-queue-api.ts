@@ -109,8 +109,30 @@ export async function fetchLiveNurseQueue(options?: {
             sdata.raw_complaint ||
             c.chiefComplaint ||
             (syms.length ? syms.join(", ") : "");
+          const rawUpdated = c.updated_at || c.updatedAt;
           return {
             ...c,
+            updatedAt: rawUpdated,
+            createdAt: c.created_at || c.createdAt,
+            dischargeReportUrl: c.discharge_report_url || c.dischargeReportUrl,
+            dischargeReportText: c.discharge_report_text || c.dischargeReportText,
+            reviewedAt: (() => {
+              if (rawUpdated) {
+                try {
+                  const d = new Date(rawUpdated);
+                  if (!isNaN(d.getTime())) {
+                    return d.toLocaleString([], {
+                      month: "short",
+                      day: "numeric",
+                      year: "numeric",
+                      hour: "2-digit",
+                      minute: "2-digit",
+                    });
+                  }
+                } catch {}
+              }
+              return "Recently";
+            })(),
             symptomsData: {
               symptoms: syms,
               raw_complaint: sdata.raw_complaint || c.symptomsData?.raw_complaint || c.chiefComplaint,
