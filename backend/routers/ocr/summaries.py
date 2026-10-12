@@ -1,6 +1,11 @@
-from typing import List, Dict, Any, Tuple
+from typing import List, Dict, Any, Tuple, Optional
 
-def generate_patient_summary_details(test_name: str, parameters: List[Dict[str, Any]], clinical_flags: List[str]) -> Tuple[str, Dict[str, Any]]:
+def generate_patient_summary_details(
+    test_name: str,
+    parameters: List[Dict[str, Any]],
+    clinical_flags: List[str],
+    lifestyle_advice: Optional[List[str]] = None
+) -> Tuple[str, Dict[str, Any]]:
     """
     Generates plain-language, patient-centric summary details for patients
     who may struggle with complex medical terminology and lab biomarker metrics.
@@ -37,14 +42,20 @@ def generate_patient_summary_details(test_name: str, parameters: List[Dict[str, 
         name = p.get("name", "")
         raw_val = str(p.get("value", "")).strip()
         raw_unit = str(p.get("unit", "")).strip()
-        val = raw_val if (not raw_unit or raw_unit.lower() in raw_val.lower()) else f"{raw_val} {raw_unit}".strip()
+        val = raw_val if (not raw_unit or raw_unit.lower() in raw_val.lower() or raw_unit == "Finding") else f"{raw_val} {raw_unit}".strip()
         st = p.get("status", "ABNORMAL").upper()
         nl = name.lower()
 
         meaning = p.get("clinical_significance") or f"Value is {st.lower()} compared to the standard reference range ({p.get('reference_range', 'normal')})."
         action = "Discuss with your doctor to determine if medication or dietary adjustments are needed."
 
-        if "hemoglobin" in nl or "hb" in nl:
+        if "blood pressure" in nl or nl == "bp":
+            meaning = "Elevated blood pressure increases cardiac workload and cardiovascular risk over time."
+            action = "Limit sodium/salt intake, stay physically active, and consult your doctor for blood pressure management."
+        elif "body mass index" in nl or "bmi" in nl:
+            meaning = "Body Mass Index (BMI) indicates body weight is above standard healthy parameters."
+            action = "Adopt a balanced portion-controlled diet and engage in at least 30 minutes of daily physical exercise."
+        elif "hemoglobin" in nl or "hb" in nl:
             if st == "LOW":
                 meaning = "Low hemoglobin means fewer red blood cells carrying oxygen, which can cause tiredness, weakness, or feeling cold."
                 action = "Eat iron-rich foods such as spinach, lentils, jaggery, and dates. Consult your doctor regarding iron supplements."
@@ -72,6 +83,7 @@ def generate_patient_summary_details(test_name: str, parameters: List[Dict[str, 
 
         abnormal_findings.append({
             "parameter": name,
+            "name": name,
             "value": val,
             "status": st,
             "meaning": meaning,
@@ -79,7 +91,7 @@ def generate_patient_summary_details(test_name: str, parameters: List[Dict[str, 
             "reference_range": p.get("reference_range", "-")
         })
 
-    normal_findings = [f"{p.get('name')}: Healthy ({p.get('value')} {p.get('unit', '')})".strip() for p in normal]
+    normal_findings = [f"{p.get('name')}: Healthy ({p.get('value')} {p.get('unit', '')})".replace(" Finding", "").strip() for p in normal]
 
     what_to_ask_doctor = [
         f"What is the most likely cause of my {abnormal[0]['name'] if abnormal else 'results'}?",
@@ -87,20 +99,26 @@ def generate_patient_summary_details(test_name: str, parameters: List[Dict[str, 
         "What dietary or daily activity adjustments do you recommend for me?"
     ]
 
-    lifestyle_tips = [
-        "Drink 8-10 glasses of clean water daily to support cell metabolism and kidney function.",
-        "Ensure 7-8 hours of sound sleep every night to help your body recuperate.",
-        "Keep a printed or digital copy of this report handy during your clinic or PHC visit."
-    ]
+    lifestyle_tips = (
+        list(lifestyle_advice) if lifestyle_advice and len(lifestyle_advice) > 0 else [
+            "Drink 8-10 glasses of clean water daily to support cell metabolism and kidney function.",
+            "Ensure 7-8 hours of sound sleep every night to help your body recuperate.",
+            "Keep a printed or digital copy of this report handy during your clinic or PHC visit."
+        ]
+    )
 
     summary_details = {
         "overview": patient_summary,
         "health_status": health_status,
         "urgency": urgency,
         "abnormal_findings": abnormal_findings,
+        "key_abnormal_parameters": abnormal_findings,
+        "normal_parameters": normal_findings,
         "normal_findings": normal_findings,
         "what_to_ask_doctor": what_to_ask_doctor,
+        "questions_for_doctor": what_to_ask_doctor,
         "lifestyle_tips": lifestyle_tips,
+        "lifestyle_recommendations": lifestyle_tips,
         "clinical_flags": clinical_flags
     }
 

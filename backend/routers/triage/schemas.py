@@ -31,6 +31,7 @@ class QwenSymptomExtractRequest(BaseModel):
     language: Optional[str] = "English"
     patient_age: Optional[int] = 42
     patient_gender: Optional[str] = "Male"
+    report_data: Optional[Dict[str, Any]] = None
 
 class QwenTriageCaseSubmission(BaseModel):
     patient_id: Optional[str] = None

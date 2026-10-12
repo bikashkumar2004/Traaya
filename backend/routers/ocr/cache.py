@@ -46,7 +46,8 @@ async def get_redis():
 async def get_cached_document_extraction(file_hash: str) -> Optional[Dict[str, Any]]:
     """
     Checks Upstash Redis (and fast RAM) for an existing document extraction.
-    Returns parsed dictionary if found and fresh, else None.
+    Only returns data if it was verified from the live OCR model (model_verified is True).
+    Returns parsed dictionary if found and valid, else None.
     """
     now = time.time()
 
@@ -54,7 +55,12 @@ async def get_cached_document_extraction(file_hash: str) -> Optional[Dict[str, A
     if file_hash in _LOCAL_CACHE:
         expiry = _LOCAL_CACHE_EXPIRY.get(file_hash, 0)
         if expiry > now:
-            return _LOCAL_CACHE[file_hash]
+            entry = _LOCAL_CACHE[file_hash]
+            if entry.get("model_verified") is True:
+                return entry
+            else:
+                _LOCAL_CACHE.pop(file_hash, None)
+                _LOCAL_CACHE_EXPIRY.pop(file_hash, None)
         else:
             _LOCAL_CACHE.pop(file_hash, None)
             _LOCAL_CACHE_EXPIRY.pop(file_hash, None)
@@ -66,9 +72,13 @@ async def get_cached_document_extraction(file_hash: str) -> Optional[Dict[str, A
             cached_json = await redis.get(f"ocr:doc:{file_hash}")
             if cached_json:
                 data = json.loads(cached_json)
-                _LOCAL_CACHE[file_hash] = data
-                _LOCAL_CACHE_EXPIRY[file_hash] = now + 3600
-                return data
+                if data.get("model_verified") is True:
+                    _LOCAL_CACHE[file_hash] = data
+                    _LOCAL_CACHE_EXPIRY[file_hash] = now + 3600
+                    print(f"[OCR Redis Cache HIT] Retrieved verified extraction from Upstash Redis (Hash: {file_hash[:10]}...)")
+                    return data
+                else:
+                    await redis.delete(f"ocr:doc:{file_hash}")
         except Exception as e:
             print(f"[OCR Cache Read Warning] {e}")
 
@@ -78,8 +88,12 @@ async def get_cached_document_extraction(file_hash: str) -> Optional[Dict[str, A
 async def set_cached_document_extraction(file_hash: str, data: Dict[str, Any], ttl_seconds: int = 2592000) -> None:
     """
     Saves document extraction directly to Upstash Cloud Redis (default 30 days TTL).
+    Only called when the live model produces a verified extraction.
     """
     now = time.time()
+    data["model_verified"] = True
+    data["ocr_source"] = data.get("ocr_source") or "kaggle_gpu"
+
     # 1. Update in-memory runtime cache
     _LOCAL_CACHE[file_hash] = data
     _LOCAL_CACHE_EXPIRY[file_hash] = now + min(ttl_seconds, 86400 * 30)
@@ -94,3 +108,16 @@ async def set_cached_document_extraction(file_hash: str, data: Dict[str, Any], t
             print(f"[OCR Cache Write Warning] {e}")
     else:
         print(f"[OCR Cache Warning] Redis not reachable; could not save key 'ocr:doc:{file_hash[:12]}...' to Upstash.")
+
+
+async def delete_cached_document(file_hash: str) -> None:
+    """Removes a document extraction key from both in-memory and Upstash Redis cache."""
+    _LOCAL_CACHE.pop(file_hash, None)
+    _LOCAL_CACHE_EXPIRY.pop(file_hash, None)
+    redis = await get_redis()
+    if redis:
+        try:
+            await redis.delete(f"ocr:doc:{file_hash}")
+            print(f"[OCR Cache] Deleted key 'ocr:doc:{file_hash[:12]}...' from Upstash Cloud Redis.")
+        except Exception as e:
+            print(f"[OCR Cache Delete Warning] {e}")

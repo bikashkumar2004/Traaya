@@ -53,7 +53,8 @@ async def qwen_extract_symptoms(request: QwenSymptomExtractRequest):
         raw_symptoms=raw,
         patient_age=request.patient_age,
         patient_gender=request.patient_gender,
-        language=request.language
+        language=request.language,
+        report_data=request.report_data
     )
 
 

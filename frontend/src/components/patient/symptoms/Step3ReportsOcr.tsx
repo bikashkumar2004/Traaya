@@ -96,6 +96,7 @@ export interface Step3ReportsOcrProps {
   onSaveDraft: () => void;
   isSavingDraft: boolean;
   isSubmitting: boolean;
+  isGeneratingQuestions?: boolean;
 }
 
 export function Step3ReportsOcr({
@@ -110,6 +111,7 @@ export function Step3ReportsOcr({
   onSaveDraft,
   isSavingDraft,
   isSubmitting,
+  isGeneratingQuestions = false,
 }: Step3ReportsOcrProps) {
   const [filterStatus, setFilterStatus] = useState<"ALL" | "ABNORMAL" | "NORMAL">("ALL");
   const [searchQuery, setSearchQuery] = useState("");
@@ -408,12 +410,18 @@ export function Step3ReportsOcr({
                           </td>
                           <td className="py-2.5 px-4">
                             <span className="font-mono font-bold text-slate-900">
-                              {param.value} {param.unit}
+                              {param.unit && param.unit !== "Finding" && !String(param.value || "").toLowerCase().includes(param.unit.toLowerCase())
+                                ? `${param.value} ${param.unit}`
+                                : param.value}
                             </span>
                           </td>
                           {parameters.some((p) => p.reference_range) && (
                             <td className="py-2.5 px-4 text-slate-600">
-                              {param.reference_range ? `${param.reference_range} ${param.unit}` : "-"}
+                              {param.reference_range
+                                ? (param.unit && param.unit !== "Finding" && !String(param.reference_range || "").toLowerCase().includes(param.unit.toLowerCase())
+                                    ? `${param.reference_range} ${param.unit}`
+                                    : param.reference_range)
+                                : "-"}
                             </td>
                           )}
                           <td className="py-2.5 px-4 text-right">
@@ -533,7 +541,7 @@ export function Step3ReportsOcr({
           className="px-4 py-2.5 bg-slate-100 hover:bg-slate-200 text-slate-700 font-bold text-xs sm:text-sm rounded-xl cursor-pointer transition-all flex items-center gap-1.5"
         >
           <ArrowLeft className="w-4 h-4" />
-          <span>Back to Details</span>
+          <span>Back to Symptoms</span>
         </button>
 
         <div className="flex items-center gap-2.5">
@@ -550,10 +558,25 @@ export function Step3ReportsOcr({
           <button
             type="button"
             onClick={onContinue}
-            className="px-6 py-2.5 bg-teal-800 hover:bg-teal-900 text-white font-bold text-xs sm:text-sm rounded-xl flex items-center gap-2 shadow-sm transition-all cursor-pointer hover:scale-[1.01] active:scale-95"
+            disabled={isScanningOcr || isGeneratingQuestions}
+            className="px-6 py-2.5 bg-teal-800 hover:bg-teal-900 text-white font-bold text-xs sm:text-sm rounded-xl flex items-center gap-2 shadow-sm transition-all cursor-pointer hover:scale-[1.01] active:scale-95 disabled:opacity-50"
           >
-            <span>Continue to Address</span>
-            <ArrowRight className="w-4 h-4" />
+            {isGeneratingQuestions ? (
+              <>
+                <span className="w-3.5 h-3.5 border-2 border-white/30 border-t-white rounded-full animate-spin" />
+                <span>Generating Follow-Up Questions...</span>
+              </>
+            ) : uploadedReport ? (
+              <>
+                <span>Correlate &amp; Continue to Questions</span>
+                <ArrowRight className="w-4 h-4" />
+              </>
+            ) : (
+              <>
+                <span>Skip Report &amp; Continue to Questions</span>
+                <ArrowRight className="w-4 h-4" />
+              </>
+            )}
           </button>
         </div>
       </div>

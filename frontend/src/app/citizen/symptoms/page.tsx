@@ -833,9 +833,15 @@ function PatientReportSymptomsForm() {
     setShowAddFamilyModal(false);
   };
 
-  // Step 1 -> Step 2: Trigger Dynamic Symptom Extraction via Hugging Face
-  const handleProceedToStep2 = async () => {
+  // Step 1 -> Step 2: Proceed to Medical Reports
+  const handleProceedToReports = () => {
     if (!symptomText.trim()) return;
+    setStep(2);
+    window.scrollTo({ top: 0, behavior: "smooth" });
+  };
+
+  // Step 2 -> Step 3: Trigger Dynamic Symptom & Lab-Correlated Extraction via Qwen
+  const handleProceedToQuestions = async () => {
     setIsExtracting(true);
 
     try {
@@ -846,8 +852,9 @@ function PatientReportSymptomsForm() {
           raw_symptoms: symptomText,
           language: selectedLanguage,
           patient_age: effectivePatientAge,
-          patient_gender: effectivePatientGender
-        })
+          patient_gender: effectivePatientGender,
+          report_data: ocrData || null,
+        }),
       });
 
       if (res.ok) {
@@ -869,7 +876,7 @@ function PatientReportSymptomsForm() {
     } finally {
       setIsExtracting(false);
       setCurrentQuestionIndex(0);
-      setStep(2);
+      setStep(3);
       window.scrollTo({ top: 0, behavior: "smooth" });
     }
   };
@@ -1172,8 +1179,8 @@ function PatientReportSymptomsForm() {
           <div className="flex items-center gap-1.5 sm:gap-2 text-xs font-sans overflow-x-auto py-1">
             {[
               { num: 1, label: "Symptoms" },
-              { num: 2, label: "Details" },
-              { num: 3, label: "Reports" },
+              { num: 2, label: "Reports" },
+              { num: 3, label: "Questions" },
               { num: 4, label: "Address" },
               { num: 5, label: "Review" }
             ].map((s, idx, arr) => (
@@ -1309,34 +1316,11 @@ function PatientReportSymptomsForm() {
               isOnlineTeleconsult={isOnlineTeleconsult}
               setIsOnlineTeleconsult={setIsOnlineTeleconsult}
               isExtracting={isExtracting}
-              onProceedToStep2={handleProceedToStep2}
+              onProceedToStep2={handleProceedToReports}
             />
           )}
 
           {step === 2 && (
-            <Step2ClinicalDetails
-              aiSource={aiSource}
-              followUpQuestions={followUpQuestions}
-              currentQuestionIndex={currentQuestionIndex}
-              setCurrentQuestionIndex={setCurrentQuestionIndex}
-              followUpAnswers={followUpAnswers}
-              setFollowUpAnswers={setFollowUpAnswers}
-              extractedSymptoms={extractedSymptoms}
-              setExtractedSymptoms={setExtractedSymptoms}
-              timeline={timeline}
-              missingItems={missingItems}
-              onBack={() => setStep(1)}
-              onContinue={() => {
-                setStep(3);
-                window.scrollTo({ top: 0, behavior: "smooth" });
-              }}
-              onSaveDraft={handleSaveDraft}
-              isSavingDraft={isSavingDraft}
-              isSubmitting={isSubmitting}
-            />
-          )}
-
-          {step === 3 && (
             <Step3ReportsOcr
               isScanningOcr={isScanningOcr}
               extractedSymptoms={extractedSymptoms}
@@ -1349,7 +1333,34 @@ function PatientReportSymptomsForm() {
               setReportInquiryAnswers={setReportInquiryAnswers}
               handleFileUpload={handleFileUpload}
               handleLoadSample={handleLoadSample}
-              onBack={() => setStep(2)}
+              onBack={() => {
+                setStep(1);
+                window.scrollTo({ top: 0, behavior: "smooth" });
+              }}
+              onContinue={handleProceedToQuestions}
+              onSaveDraft={handleSaveDraft}
+              isSavingDraft={isSavingDraft}
+              isSubmitting={isSubmitting}
+              isGeneratingQuestions={isExtracting}
+            />
+          )}
+
+          {step === 3 && (
+            <Step2ClinicalDetails
+              aiSource={aiSource}
+              followUpQuestions={followUpQuestions}
+              currentQuestionIndex={currentQuestionIndex}
+              setCurrentQuestionIndex={setCurrentQuestionIndex}
+              followUpAnswers={followUpAnswers}
+              setFollowUpAnswers={setFollowUpAnswers}
+              extractedSymptoms={extractedSymptoms}
+              setExtractedSymptoms={setExtractedSymptoms}
+              timeline={timeline}
+              missingItems={missingItems}
+              onBack={() => {
+                setStep(2);
+                window.scrollTo({ top: 0, behavior: "smooth" });
+              }}
               onContinue={() => {
                 setStep(4);
                 window.scrollTo({ top: 0, behavior: "smooth" });

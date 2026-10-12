@@ -145,13 +145,24 @@ class TriageAnamnesisAgent:
         raw_symptoms: str,
         patient_age: Any = 30,
         patient_gender: str = "Male",
-        language: str = "English"
+        language: str = "English",
+        report_data: Optional[Dict[str, Any]] = None
     ) -> Dict[str, Any]:
         """
         Main entry point for Step 1 -> Step 2 transition.
         Generates 8 to 10 sequential doctor questions based on SOCRATES protocol.
+        Dynamically correlates with any uploaded lab/radiology report findings.
         """
         raw = raw_symptoms.strip()
+        report_context = ""
+        if report_data:
+            t_name = report_data.get("test_name", "Medical Report")
+            params = report_data.get("parameters", [])
+            abnormal = [f"{p.get('name')}: {p.get('value')} {p.get('unit', '')} ({p.get('status')})" for p in params if p.get('status') in ("HIGH", "LOW")]
+            flags = report_data.get("clinical_flags", [])
+            report_context = f"\n[Diagnostic Findings from {t_name}]: {'; '.join(abnormal + flags)}"
+            raw = f"{raw}{report_context}"
+
         # 1. Retrieve clinical protocol from RAG
         rag_questions = self.rag.retrieve_anamnesis_protocol(raw)
         rag_protocol_summary = "\n".join([f"Step {q['step']} ({q['dimension']}): {q['question']}" for q in rag_questions])

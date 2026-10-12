@@ -629,7 +629,7 @@ export function Step1Symptoms({
             </>
           ) : (
             <>
-              <span>Proceed to Details</span>
+              <span>Proceed to Reports</span>
               <ArrowRight className="w-4 h-4" />
             </>
           )}
