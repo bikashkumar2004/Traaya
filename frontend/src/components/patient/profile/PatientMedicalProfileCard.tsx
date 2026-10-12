@@ -65,7 +65,7 @@ export function PatientMedicalProfileCard({
             <span>Medical Background &amp; Health Profile</span>
           </h3>
           <span className="text-xs text-slate-500">
-            Directly factored into clinical triage safety scoring. Connected to database.
+            These details will be shared with concerned medical experts for better context in diagnosis.
           </span>
         </div>
       </div>

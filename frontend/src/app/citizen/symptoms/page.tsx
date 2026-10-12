@@ -1170,7 +1170,7 @@ function PatientReportSymptomsForm() {
             Book Appointment
           </h1>
           <p className="text-xs sm:text-sm text-slate-600 mt-0.5">
-            5-step guided clinical evaluation with real-time laboratory OCR and nearest PHC triage routing.
+            Feeling unwell? Report through our 5-step guided reporting.
           </p>
         </div>
 

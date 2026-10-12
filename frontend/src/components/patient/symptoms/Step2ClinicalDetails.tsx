@@ -97,7 +97,7 @@ export function Step2ClinicalDetails({
       <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 border-b border-slate-100 pb-3">
         <div>
           <h2 className="text-lg sm:text-xl font-extrabold text-slate-900">
-            Clinical Review &amp; Dynamic Details
+            Help us understand your symptoms better
           </h2>
           <p className="text-xs text-slate-500 mt-0.5">
             Our AI clinical assistant asks follow-up questions one by one like a doctor to collect complete clinical details.

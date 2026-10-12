@@ -206,7 +206,7 @@ export function PatientOrganizationAffiliationCard({
             <span>Organisation &amp; Institutional Affiliation</span>
           </h3>
           <p className="text-xs text-slate-500">
-            Official occupational or campus health registry affiliation verified against organisation records.
+            Official occupational or campus health registry affiliation.
           </p>
         </div>
 

@@ -163,11 +163,11 @@ export function Step3ReportsOcr({
       <div className="border-b border-slate-100 pb-3 flex items-center justify-between gap-3 flex-wrap">
         <div>
           <h2 className="text-lg sm:text-xl font-extrabold text-slate-900 flex items-center gap-2">
-            <span>Medical Document OCR</span>
+            <span>Upload any document</span>
           </h2>
-          <p className="text-xs text-slate-500 mt-0.5">
+          {/* <p className="text-xs text-slate-500 mt-0.5">
             Uploaded document data extracted directly by your custom medical vision model.
-          </p>
+          </p> */}
         </div>
       </div>
 
@@ -197,10 +197,10 @@ export function Step3ReportsOcr({
             </div>
             <div>
               <div className="text-sm sm:text-base text-slate-900 font-extrabold">
-                Upload Medical Report or Document
+                Upload Here
               </div>
               <p className="text-xs text-slate-500 mt-1 max-w-md mx-auto">
-                Upload annual summaries, lab tests, prescriptions, or clinical notes in JPG, PNG, or PDF format.
+                Upload any annual summaries, lab tests, prescriptions, or clinical notes in JPG, PNG, or PDF format.
               </p>
             </div>
 
