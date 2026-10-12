@@ -29,10 +29,18 @@ async def submit_nurse_action(req: NurseActionRequest):
     try:
         async with httpx.AsyncClient(timeout=10.0) as client:
             # 1. Fetch ticket to get its UUID
+            clean_case_no = re.sub(r'^#', '', str(req.case_number or '')).strip()
+            params = {
+                "or": f"(case_number.eq.{clean_case_no},case_number.eq.#{clean_case_no},case_number.eq.{req.case_number})",
+                "select": "id,case_number,status,symptoms_data"
+            }
+            if re.match(r'^[0-9a-fA-F-]{36}$', clean_case_no):
+                params["or"] = f"(id.eq.{clean_case_no},case_number.eq.{clean_case_no},case_number.eq.#{clean_case_no},case_number.eq.{req.case_number})"
+
             t_res = await client.get(
                 f"{SUPABASE_URL}/rest/v1/triage_tickets",
                 headers=headers,
-                params={"case_number": f"eq.{req.case_number}", "select": "id,status,chief_complaint,symptoms_data"}
+                params=params
             )
             tickets = t_res.json() if t_res.status_code == 200 else []
             if not tickets:
@@ -95,7 +103,9 @@ async def submit_nurse_action(req: NurseActionRequest):
                         effective_doctor_name = profiles_data[0].get("full_name") or effective_doctor_name
 
             if not effective_doctor_id and effective_doctor_name:
-                clean_doc_name = re.sub(r'^(Dr\.?|MD)\s*', '', effective_doctor_name, flags=re.I).strip()
+                first_part = effective_doctor_name.split("—")[0].split("-")[0].strip()
+                clean_doc_name = re.sub(r'^(Dr\.?|MD)\s*', '', first_part, flags=re.I).strip()
+                clean_doc_name = re.sub(r',?\s*MD\b', '', clean_doc_name, flags=re.I).strip()
                 if len(clean_doc_name) > 2:
                     p_res = await client.get(
                         f"{SUPABASE_URL}/rest/v1/profiles",
@@ -105,6 +115,7 @@ async def submit_nurse_action(req: NurseActionRequest):
                     profiles_data = p_res.json() if p_res.status_code == 200 else []
                     if profiles_data:
                         effective_doctor_id = profiles_data[0]["id"]
+                        effective_doctor_name = profiles_data[0].get("full_name") or effective_doctor_name
 
             if not effective_doctor_id and (is_doctor_action or is_forward_to_doctor):
                 p_res = await client.get(
@@ -115,6 +126,8 @@ async def submit_nurse_action(req: NurseActionRequest):
                 profiles_data = p_res.json() if p_res.status_code == 200 else []
                 if profiles_data:
                     effective_doctor_id = profiles_data[0]["id"]
+                    if not effective_doctor_name:
+                        effective_doctor_name = profiles_data[0].get("full_name")
 
             # Resolve nurse_id referencing profiles(id)
             effective_nurse_id = req.nurse_id
@@ -203,6 +216,8 @@ async def submit_nurse_action(req: NurseActionRequest):
                 update_payload["nurse_id"] = effective_nurse_id
             if effective_doctor_id and (is_doctor_action or is_forward_to_doctor or req.doctor_id or req.doctor_name):
                 update_payload["doctor_id"] = effective_doctor_id
+            if effective_doctor_name:
+                update_payload["assigned_doctor_name"] = effective_doctor_name
 
             if norm_status == "Completed" or req.action_type.strip().lower() == "resolve":
                 raw_note = (req.review_note or "").strip()
@@ -210,7 +225,7 @@ async def submit_nurse_action(req: NurseActionRequest):
                     update_payload["resolve_notes"] = raw_note
                 else:
                     sdata = (tickets[0].get("symptoms_data") or {}) if isinstance(tickets[0].get("symptoms_data"), dict) else {}
-                    complaint = tickets[0].get("chief_complaint") or sdata.get("raw_complaint") or sdata.get("complaint") or sdata.get("summary") or "acute illness complaints"
+                    complaint = sdata.get("raw_complaint") or sdata.get("chief_complaint") or sdata.get("complaint") or sdata.get("summary") or "acute illness complaints"
                     vitals = sdata.get("vitals") or {}
                     pulse = f"{vitals.get('pulse')} bpm" if vitals.get('pulse') else "78 bpm"
                     bp = vitals.get('bp') or (f"{vitals.get('systolic')}/{vitals.get('diastolic')} mmHg" if vitals.get('systolic') else "120/80 mmHg")
@@ -222,7 +237,14 @@ async def submit_nurse_action(req: NurseActionRequest):
                         auto_text += f' Doctor review notes: "{raw_note}".'
                     update_payload["resolve_notes"] = auto_text
             if req.schedule_time or norm_status == "Scheduled":
-                update_payload["schedule_time"] = req.schedule_time or datetime.now().isoformat()
+                sch_time = req.schedule_time
+                if sch_time:
+                    try:
+                        dt = datetime.fromisoformat(sch_time.replace("Z", "+00:00"))
+                        sch_time = dt.isoformat()
+                    except Exception:
+                        pass
+                update_payload["schedule_time"] = sch_time or datetime.now().isoformat()
             if req.referal_facility or req.referral_destination:
                 fac_dest = req.referal_facility or req.referral_destination
                 update_payload["referal_facility"] = fac_dest
@@ -273,11 +295,14 @@ async def submit_nurse_action(req: NurseActionRequest):
                     for idx, line in enumerate(lines)
                 ]
 
-            await client.patch(
+            patch_res = await client.patch(
                 f"{SUPABASE_URL}/rest/v1/triage_tickets?id=eq.{ticket_db_id}",
                 headers=headers,
                 json=update_payload
             )
+            if patch_res.status_code >= 400:
+                print(f"[FastAPI Actions] Failed to update triage_tickets: {patch_res.status_code} {patch_res.text}")
+                raise HTTPException(status_code=500, detail=f"Database update failed: {patch_res.text}")
 
         return {
             "status": "success",

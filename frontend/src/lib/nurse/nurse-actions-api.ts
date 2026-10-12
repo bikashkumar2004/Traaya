@@ -111,7 +111,8 @@ export async function submitLiveNurseAction(payload: {
 
       // If doctor_id is still not resolved, lookup by name
       if (!isValidUuid(effectiveDoctorId) && effectiveDoctorName && effectiveDoctorName !== "Other") {
-        const cleanDocName = effectiveDoctorName.replace(/^(Dr\.?|MD)\s*/gi, "").replace(/,?\s*MD\b/gi, "").trim();
+        const firstPart = effectiveDoctorName.split("—")[0].split("-")[0].trim();
+        const cleanDocName = firstPart.replace(/^(Dr\.?|MD)\s*/gi, "").replace(/,?\s*MD\b/gi, "").trim();
         if (cleanDocName.length > 1) {
           const { data: namedDoc } = await supabase
             .from("profiles")
@@ -233,33 +234,24 @@ export async function submitLiveNurseAction(payload: {
     }
   }
 
-  // 1. Try FastAPI endpoint
-  try {
-    const res = await fetch(`${API_BASE}/api/triage/nurse-action`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        ...payload,
-        nurse_id: effectiveNurseId,
-        nurse_name: effectiveNurseName,
-        doctor_id: effectiveDoctorId,
-        doctor_name: effectiveDoctorName,
-        target_status: normalizedStatus
-      }),
-    });
-    if (res.ok) return true;
-  } catch (err) {
-    console.warn("[NurseAPI] Backend submit action failed, attempting direct Supabase...", err);
-  }
+  let supabaseSuccess = false;
 
-  // 2. Direct Supabase fallback
+  // 1. Direct Supabase update (Guarantees immediate Postgres persistence)
   if (supabase) {
     try {
-      const { data: tData } = await supabase
+      const cleanCaseNum = (payload.case_number || "").replace(/^#/, "").trim();
+      let query = supabase
         .from("triage_tickets")
-        .select("id, status, symptoms_data, chief_complaint")
-        .eq("case_number", payload.case_number)
-        .single();
+        .select("id, status, symptoms_data, case_number");
+
+      if (isValidUuid(payload.case_number)) {
+        query = query.or(`id.eq.${payload.case_number},case_number.eq.${cleanCaseNum},case_number.eq.#${cleanCaseNum}`);
+      } else {
+        query = query.or(`case_number.eq.${cleanCaseNum},case_number.eq.#${cleanCaseNum},case_number.eq.${payload.case_number}`);
+      }
+
+      const { data: tickets, error: fetchErr } = await query.limit(1);
+      const tData = tickets && tickets[0];
 
       if (tData) {
         const updatePayload: Record<string, any> = {
@@ -273,19 +265,33 @@ export async function submitLiveNurseAction(payload: {
         if (isValidUuid(effectiveDoctorId)) {
           updatePayload.doctor_id = effectiveDoctorId;
         }
+        if (effectiveDoctorName) {
+          updatePayload.assigned_doctor_name = effectiveDoctorName;
+        }
 
         if (normalizedStatus === "Completed" || payload.action_type === "Resolve") {
+          const sdata = ((tData.symptoms_data || {}) as any);
+          const chiefComplaint = sdata.raw_complaint || sdata.chief_complaint || sdata.summary || "acute illness symptoms";
           if (payload.review_note && payload.review_note.includes("stable hemodynamics")) {
             updatePayload.resolve_notes = payload.review_note;
           } else {
             updatePayload.resolve_notes = buildAutoResolveNotes({
-              chiefComplaint: tData.chief_complaint,
+              chiefComplaint,
               symptomsData: tData.symptoms_data,
             }, payload.review_note);
           }
         }
         if (payload.schedule_time || normalizedStatus === "Scheduled") {
-          updatePayload.schedule_time = payload.schedule_time || new Date(Date.now() + 2 * 3600 * 1000).toISOString();
+          let sTime = payload.schedule_time;
+          if (sTime) {
+            try {
+              const d = new Date(sTime);
+              if (!isNaN(d.getTime())) {
+                sTime = d.toISOString();
+              }
+            } catch {}
+          }
+          updatePayload.schedule_time = sTime || new Date(Date.now() + 2 * 3600 * 1000).toISOString();
         }
         if (payload.referal_facility || payload.referral_destination) {
           updatePayload.referal_facility = payload.referal_facility || payload.referral_destination;
@@ -337,7 +343,8 @@ export async function submitLiveNurseAction(payload: {
 
         if (upErr) {
           console.error("[NurseAPI] Direct Supabase update error:", upErr);
-          return false;
+        } else {
+          supabaseSuccess = true;
         }
 
         // Increment nurse stats in nurse_profiles if effectiveNurseId exists
@@ -398,15 +405,32 @@ export async function submitLiveNurseAction(payload: {
         } catch (dpErr) {
           console.warn("[NurseAPI] Notice updating doctor_profiles stats:", dpErr);
         }
-
-        return true;
       }
     } catch (err) {
       console.error("[NurseAPI] Supabase direct action submit error:", err);
     }
   }
 
-  return false;
+  // 2. Also sync to FastAPI endpoint
+  try {
+    const res = await fetch(`${API_BASE}/api/triage/nurse-action`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        ...payload,
+        nurse_id: effectiveNurseId,
+        nurse_name: effectiveNurseName,
+        doctor_id: effectiveDoctorId,
+        doctor_name: effectiveDoctorName,
+        target_status: normalizedStatus
+      }),
+    });
+    if (res.ok) return true;
+  } catch (err) {
+    console.warn("[NurseAPI] Backend submit action notification notice:", err);
+  }
+
+  return supabaseSuccess;
 }
 
 export async function updateLiveTriageAssessment(

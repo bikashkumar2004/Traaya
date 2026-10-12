@@ -308,10 +308,22 @@ export function CaseReviewWorkspace({
     setActionSuccessToast(`Action "${selectedAction}" recorded successfully for ${caseData.id}`);
     
     setTimeout(() => {
-      const scheduledIso =
-        selectedAction === "Schedule & Forward to Doctor" && scheduleTime
-          ? new Date(scheduleTime).toISOString()
-          : undefined;
+      let scheduledIso: string | undefined = undefined;
+      if (selectedAction === "Schedule & Forward to Doctor") {
+        if (scheduleTime) {
+          try {
+            const parsed = new Date(scheduleTime);
+            if (!isNaN(parsed.getTime())) {
+              scheduledIso = parsed.toISOString();
+            }
+          } catch {}
+        }
+        if (!scheduledIso) {
+          const fallback = new Date();
+          fallback.setHours(fallback.getHours() + 2);
+          scheduledIso = fallback.toISOString();
+        }
+      }
       const revertedQJson =
         selectedAction === "Request More Information"
           ? (revertedQuestionsList.length > 0
