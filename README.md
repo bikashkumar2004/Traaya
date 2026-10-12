@@ -459,3 +459,12 @@ When compiling presentation slides for hackathons, clinical juries, or stakehold
 ## License & Attribution
 
 Designed and engineered for the **National Digital Health Ecosystem** under the **TRAAYA Healthcare Initiative**. Built with precision, security, and accessibility for frontline healthcare workers across India.
+
+# Start everything in the background
+docker compose up -d --build
+
+# View live logs from all services
+docker compose logs -f
+
+# Stop all containers safely
+docker compose down
