@@ -24,10 +24,7 @@ export function LandingHero() {
         {/* Left Column: Headline, Copy & CTAs */}
         <div className="lg:col-span-7 space-y-6">
           {/* Top compliance pill badge */}
-          <div className="inline-flex items-center gap-2 px-3 py-1 rounded-full bg-teal-50 border border-teal-200 text-teal-800 text-[11px] font-bold tracking-wide">
-            <span className="w-1.5 h-1.5 rounded-full bg-teal-600 animate-pulse"></span>
-            <span>SECURE DIGITAL HEALTH &bull; HL7 FHIR COMPLIANT &bull; ISO 27001</span>
-          </div>
+
 
           {/* Main Headline */}
           <h1 className="text-3xl sm:text-5xl lg:text-[3.25rem] font-extrabold tracking-tight text-slate-900 leading-[1.12]">
@@ -74,18 +71,12 @@ export function LandingHero() {
 
           {/* Trust checkmarks under buttons */}
           <div className="pt-3 flex flex-wrap items-center gap-x-6 gap-y-2 text-xs text-slate-500 font-medium">
-            <span className="flex items-center gap-1.5">
-              <CheckCircle2 className="w-4 h-4 text-teal-600 shrink-0" />
-              <span>No patient PII stored</span>
-            </span>
+            
             <span className="flex items-center gap-1.5">
               <CheckCircle2 className="w-4 h-4 text-teal-600 shrink-0" />
               <span>Digital Health Standards Compliance</span>
             </span>
-            <span className="flex items-center gap-1.5">
-              <CheckCircle2 className="w-4 h-4 text-teal-600 shrink-0" />
-              <span>Offline-First Architecture</span>
-            </span>
+            
           </div>
         </div>
 
@@ -100,7 +91,7 @@ export function LandingHero() {
                 </div>
                 <div>
                   <div className="text-xs font-bold text-slate-900 flex items-center gap-1.5">
-                    <span>Patient 1482 &bull; 32 Y / Male</span>
+                    <span>PAT-148257 &bull; 32 Y / Male</span>
                     <span className="w-2 h-2 rounded-full bg-amber-500 animate-pulse"></span>
                   </div>
                   <div className="text-[10px] text-slate-500">
@@ -110,7 +101,7 @@ export function LandingHero() {
               </div>
 
               <span className="text-[10px] font-bold px-2 py-0.5 rounded bg-emerald-50 text-emerald-800 border border-emerald-200">
-                Digital ID Linked
+                Active
               </span>
             </div>
 
@@ -119,7 +110,7 @@ export function LandingHero() {
               <div className="flex items-center justify-between text-xs">
                 <span className="font-bold text-slate-700 flex items-center gap-1.5">
                   <Volume2 className="w-3.5 h-3.5 text-teal-600" />
-                  <span>Doctor Voice / Field Note Snippet</span>
+                  <span>Citizen Voice Snippet</span>
                 </span>
                 <span className="text-[10px] text-slate-400 font-mono">0:32 sec</span>
               </div>
@@ -187,7 +178,7 @@ export function LandingHero() {
               <div className="flex items-center justify-between text-xs">
                 <span className="font-bold text-teal-900 flex items-center gap-1.5">
                   <ShieldAlert className="w-4 h-4 text-amber-600" />
-                  <span>AI Risk Suggestion: Priority 1</span>
+                  <span>Triage Suggestion: Yellow</span>
                 </span>
                 <span className="text-[10px] font-bold px-2 py-0.5 rounded-full bg-amber-100 text-amber-900">
                   Observation Required
